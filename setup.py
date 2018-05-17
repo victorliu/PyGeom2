@@ -2,14 +2,19 @@ from distutils.core import setup, Extension
 from sys import platform
 import os
 
+libraries = ['glfw3'];
 if platform == 'darwin':
 	os.environ['LDFLAGS'] = '-framework Cocoa -framework OpenGL -framework IOKit -framework CoreFoundation -framework CoreVideo';
+elif platform == 'win32':
+	libraries.append('opengl32');
+elif platform == 'linux':
+	libraries.append('GL');
 
 PyGeom2 = Extension('PyGeom2',
 	include_dirs = ['gl3w/include','/usr/local/include'],
-	libraries = ['glfw3'],
+	libraries = libraries,
 	library_dirs = ['/usr/local/lib'],
-	sources = ['PyGeom2.c', 'gl3w/src/gl3w.c', 'nanovg/src/nanovg.c']
+	sources = ['PyGeom2.c', 'gl3w/src/gl3w.c', 'nanovg/src/nanovg.c', 'fonts/dejavu_sans_mono.c']
 )
 
 setup (name = 'PyGeom2',

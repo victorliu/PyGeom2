@@ -8,6 +8,8 @@
 #define NANOVG_GL3_IMPLEMENTATION
 #include "nanovg/src/nanovg_gl.h"
 
+#include "fonts/dejavu.h"
+
 //#include "imgui_impl_glfw_gl3.cpp"
 static int PyBoolean_converter(PyObject *arg, int *result){
 	if(PyBool_Check(arg)){
@@ -561,6 +563,8 @@ static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyOb
 	)){ return NULL; }
 	
 	nvgFontSize(ctx->vg, size);
+	nvgFontFace(ctx->vg, "mono");
+	nvgTextAlign(ctx->vg, NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
 	nvgFillColor(ctx->vg, color);
 	const char *cstr = PyBytes_AsString(str);
 	nvgText(ctx->vg, ctx->p[pbase->i].p[0], ctx->p[pbase->i].p[1], cstr, NULL);
@@ -874,7 +878,7 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	
 	vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES | NVG_DEBUG);
 	
-	nvgFontFace(vg, "sans");
+	nvgCreateFontMem(vg, "mono", DejaVuSansMono, sizeof(DejaVuSansMono), 0);
 	
 	//ImGui_ImplGlfwGL3_Init(window, false);
 	glfwSwapInterval(1);
@@ -889,13 +893,15 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	ctx->nmp_alloc = 128;
 	ctx->mp = (int*)malloc(sizeof(int)*ctx->nmp_alloc);
 	
+	glEnable(GL_STENCIL_TEST);
+	
 	while(!glfwWindowShouldClose(window)){
 		ctx->np = 0;
 		ctx->nmp_cur = 0;
 		//ImGui_ImplGlfwGL3_NewFrame();
 		
 		glClearColor(0.2f, 0.2f, 0.2f, 1.0f );
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 		
 		int winWidth, winHeight;
 		int fbWidth, fbHeight;

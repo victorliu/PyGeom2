@@ -1,0 +1,3 @@
+In order to hexdump a TTF file:
+
+hexdump -v -e '16/1 "_x%02X" "\n"' filename | sed 's/_/\\/g; s/\\x  //g; s/.*/    "&"/'
