@@ -768,7 +768,7 @@ static void glfw_cursor_callback(GLFWwindow* window, double x, double y){
 	if(viz_state.mouse_button_down[0]){
 		if(viz_state.moused_point < 0){ // if no selected point, drag view
 			const double mindim = viz_state.window_size[2];
-			const double curscale = viz_state.view_scale / mindim;
+			const double curscale = 1/mindim;//viz_state.view_scale / mindim;
 			viz_state.view_center[0] = curscale * (x - viz_state.mouse_down_pos[0]) + viz_state.mouse_down_center[0];
 			viz_state.view_center[1] = curscale * (y - viz_state.mouse_down_pos[1]) + viz_state.mouse_down_center[1];
 		}else if(0 <= viz_state.moused_point && viz_state.moused_point < ctx->np && (ctx->p[viz_state.moused_point].flags & GPOINT_MOVEABLE)){
@@ -818,6 +818,17 @@ static void glfw_mouse_scroll_callback(GLFWwindow* window, double x, double y){
 			view_scale_factor = 0.95;
 		}
 		viz_state.view_scale *= view_scale_factor;
+		{ // apply translation to keep point under the cursor fixed
+			glfwGetCursorPos(window, &x, &y);
+			y = viz_state.window_size[1] - y;
+			const double mindim = viz_state.window_size[2];
+			const double r[2] = {
+				(x - 0.5*viz_state.window_size[0])/mindim,
+				(y - 0.5*viz_state.window_size[1])/mindim
+			};
+			viz_state.view_center[0] = r[0] + view_scale_factor * (viz_state.view_center[0] - r[0]);
+			viz_state.view_center[1] = r[1] + view_scale_factor * (viz_state.view_center[1] - r[1]);
+		}
 	}
 }
 static void glfw_error_callback(int error, const char* description){
