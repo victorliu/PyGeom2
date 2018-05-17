@@ -314,7 +314,7 @@ NVGcontext* nvgCreateInternal(NVGparams* params)
 	memset(&fontParams, 0, sizeof(fontParams));
 	fontParams.width = NVG_INIT_FONTIMAGE_SIZE;
 	fontParams.height = NVG_INIT_FONTIMAGE_SIZE;
-	fontParams.flags = FONS_ZERO_TOPLEFT;
+	fontParams.flags = FONS_ZERO_BOTTOMLEFT;
 	fontParams.renderCreate = NULL;
 	fontParams.renderUpdate = NULL;
 	fontParams.renderDraw = NULL;
@@ -2435,7 +2435,9 @@ float nvgText(NVGcontext* ctx, float x, float y, const char* string, const char*
 	FONStextIter iter, prevIter;
 	FONSquad q;
 	NVGvertex* verts;
-	float scale = nvg__getFontScale(state) * ctx->devicePxRatio;
+	float scale = nvg__getFontScale(state);
+	float nominal_font_size = nvg__maxf(scale*state->fontSize, 64.);
+	scale = nominal_font_size / state->fontSize * ctx->devicePxRatio;
 	float invscale = 1.0f / scale;
 	int cverts = 0;
 	int nverts = 0;
@@ -2480,11 +2482,11 @@ float nvgText(NVGcontext* ctx, float x, float y, const char* string, const char*
 		// Create triangles
 		if (nverts+6 <= cverts) {
 			nvg__vset(&verts[nverts], c[0], c[1], q.s0, q.t0); nverts++;
-			nvg__vset(&verts[nverts], c[4], c[5], q.s1, q.t1); nverts++;
 			nvg__vset(&verts[nverts], c[2], c[3], q.s1, q.t0); nverts++;
-			nvg__vset(&verts[nverts], c[0], c[1], q.s0, q.t0); nverts++;
-			nvg__vset(&verts[nverts], c[6], c[7], q.s0, q.t1); nverts++;
 			nvg__vset(&verts[nverts], c[4], c[5], q.s1, q.t1); nverts++;
+			nvg__vset(&verts[nverts], c[0], c[1], q.s0, q.t0); nverts++;
+			nvg__vset(&verts[nverts], c[4], c[5], q.s1, q.t1); nverts++;
+			nvg__vset(&verts[nverts], c[6], c[7], q.s0, q.t1); nverts++;
 		}
 	}
 

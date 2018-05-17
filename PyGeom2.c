@@ -86,19 +86,6 @@ static int halfwidth_converter(PyObject *arg, double *result){
 	PyErr_SetString(PyExc_TypeError, errmsg);
 	return 0;
 }
-/*
-Interface:
-
-G = PyGeom2.new()
-
-p = G.point(x, y, name = 'asdf', moveable = true)
-
-G.circle(center = p, radius = 2)
-G.line(p, q)
-
-G.show(grid = 1)
-
-*/
 
 struct{
 	double view_center[2];
@@ -138,13 +125,21 @@ void init_viz_state(){
 	viz_state.mouse_down_center[1] = 0;
 	viz_state.moused_point = -1;
 	
-	viz_state.point_size = 4;
-	viz_state.line_width = 2;
+	viz_state.point_size = -4;
+	viz_state.line_width = -2;
 	
 	viz_state.default_color[0] = 1.00f;
 	viz_state.default_color[1] = 0.75f;
 	viz_state.default_color[2] = 0.00f;
 	viz_state.default_color[3] = 1.00f;
+}
+
+double viz_get_coord_size(double s){
+	if(s < 0){
+		const double mindim = viz_state.window_size[2];
+		return -s/(viz_state.view_scale*mindim);
+	}
+	return s;
 }
 
 void viz_screen_to_coord(const double *screen, double *coord){
@@ -466,13 +461,7 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 	}
 	//printf("point(%f, %f)\n", p->p[0], p->p[1]);
 	nvgBeginPath(ctx->vg);
-	double pr = 0;
-	if(viz_state.point_size > 0){
-		const double mindim = viz_state.window_size[2];
-		pr = viz_state.point_size/(viz_state.view_scale*mindim);
-	}else if(viz_state.point_size < 0){
-		pr = -viz_state.point_size;
-	}
+	const double pr = viz_get_coord_size(viz_state.point_size);
 	nvgCircle(ctx->vg, x, y, pr);
 	nvgFillColor(ctx->vg, color);
 	nvgFill(ctx->vg);
@@ -495,13 +484,7 @@ static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyOb
 	nvgBeginPath(ctx->vg);
 	nvgMoveTo(ctx->vg, ctx->p[pfrom->i].p[0], ctx->p[pfrom->i].p[1]);
 	nvgLineTo(ctx->vg, ctx->p[  pto->i].p[0], ctx->p[  pto->i].p[1]);
-	double lw = 0;
-	if(viz_state.line_width > 0){
-		const double mindim = viz_state.window_size[2];
-		lw = viz_state.line_width/(viz_state.view_scale*mindim);
-	}else if(viz_state.line_width < 0){
-		lw = -viz_state.line_width;
-	}
+	const double lw = viz_get_coord_size(viz_state.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgStrokeColor(ctx->vg, color);
 	nvgStroke(ctx->vg);
@@ -532,13 +515,7 @@ static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObj
 	
 	nvgBeginPath(ctx->vg);
 	nvgArc(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], radius, start, stop, clockwise ? NVG_CW : NVG_CCW);
-	double lw = 0;
-	if(viz_state.line_width > 0){
-		const double mindim = viz_state.window_size[2];
-		lw = viz_state.line_width/(viz_state.view_scale*mindim);
-	}else if(viz_state.line_width < 0){
-		lw = -viz_state.line_width;
-	}
+	const double lw = viz_get_coord_size(viz_state.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgStrokeColor(ctx->vg, color);
 	nvgStroke(ctx->vg);
@@ -561,12 +538,17 @@ static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyOb
 		&size,
 		&color_converter, &color.rgba[0]
 	)){ return NULL; }
+	size = viz_get_coord_size(size);
 	
 	nvgFontSize(ctx->vg, size);
 	nvgFontFace(ctx->vg, "mono");
-	nvgTextAlign(ctx->vg, NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE);
+	nvgFontBlur(ctx->vg, 0);
+	nvgTextAlign(ctx->vg, NVG_ALIGN_LEFT|NVG_ALIGN_BASELINE);
 	nvgFillColor(ctx->vg, color);
 	const char *cstr = PyBytes_AsString(str);
+	float bounds[4];
+	nvgTextBounds(ctx->vg, ctx->p[pbase->i].p[0], ctx->p[pbase->i].p[1], cstr, NULL, bounds);
+	//printf("%f, %f (%s) %f %f %f %f\n", ctx->p[pbase->i].p[0], ctx->p[pbase->i].p[1], cstr, bounds[0], bounds[1], bounds[2], bounds[3]);
 	nvgText(ctx->vg, ctx->p[pbase->i].p[0], ctx->p[pbase->i].p[1], cstr, NULL);
 	
 	Py_RETURN_NONE;
@@ -590,13 +572,7 @@ static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, Py
 	
 	nvgBeginPath(ctx->vg);
 	nvgCircle(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], radius);
-	double lw = 0;
-	if(viz_state.line_width > 0){
-		const double mindim = viz_state.window_size[2];
-		lw = viz_state.line_width/(viz_state.view_scale*mindim);
-	}else if(viz_state.line_width < 0){
-		lw = -viz_state.line_width;
-	}
+	const double lw = viz_get_coord_size(viz_state.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -624,13 +600,7 @@ static PyObject *GraphicsContext_ellipse(GraphicsContext *ctx, PyObject *args, P
 	
 	nvgBeginPath(ctx->vg);
 	nvgEllipse(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], halfwidth[0], halfwidth[1]);
-	double lw = 0;
-	if(viz_state.line_width > 0){
-		const double mindim = viz_state.window_size[2];
-		lw = viz_state.line_width/(viz_state.view_scale*mindim);
-	}else if(viz_state.line_width < 0){
-		lw = -viz_state.line_width;
-	}
+	const double lw = viz_get_coord_size(viz_state.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -663,13 +633,7 @@ static PyObject *GraphicsContext_rect(GraphicsContext *ctx, PyObject *args, PyOb
 	nvgLineTo(ctx->vg, c[0] + halfwidth[0], c[1] + halfwidth[1]);
 	nvgLineTo(ctx->vg, c[0] - halfwidth[0], c[1] + halfwidth[1]);
 	nvgClosePath(ctx->vg);
-	double lw = 0;
-	if(viz_state.line_width > 0){
-		const double mindim = viz_state.window_size[2];
-		lw = viz_state.line_width/(viz_state.view_scale*mindim);
-	}else if(viz_state.line_width < 0){
-		lw = -viz_state.line_width;
-	}
+	const double lw = viz_get_coord_size(viz_state.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -706,13 +670,7 @@ static PyObject *GraphicsContext_polygon(GraphicsContext *ctx, PyObject *args, P
 		}
 	}
 	nvgClosePath(ctx->vg);
-	double lw = 0;
-	if(viz_state.line_width > 0){
-		const double mindim = viz_state.window_size[2];
-		lw = viz_state.line_width/(viz_state.view_scale*mindim);
-	}else if(viz_state.line_width < 0){
-		lw = -viz_state.line_width;
-	}
+	const double lw = viz_get_coord_size(viz_state.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -779,15 +737,8 @@ static void glfw_cursor_callback(GLFWwindow* window, double x, double y){
 	}else if(viz_state.mouse_button_down[2]){
 	}else{
 		int i;
-		double dd_threshold;
-		if(viz_state.point_size > 0){
-			const double mindim = viz_state.window_size[2];
-			const double pr = viz_state.point_size/(viz_state.view_scale*mindim);
-			dd_threshold = 1.5*pr;
-		}else{
-			const double pr = viz_state.point_size;
-			dd_threshold = 1.5*pr;
-		}
+		double dd_threshold = viz_get_coord_size(viz_state.point_size);
+		dd_threshold *= 1.5;
 		dd_threshold *= dd_threshold;
 		
 		viz_state.moused_point = -1;
@@ -859,13 +810,14 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	if(!glfwInit()){
 		return PyErr_Format(PyExc_RuntimeError, "Failed to initalize GLFW");
 	}
+#ifndef _WIN32 // don't require this on win32, and works with more cards
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#if __APPLE__
-	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
+	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, 1);
+	
 	init_viz_state();
 	viz_state.view_grid = grid;
 	
@@ -887,9 +839,10 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	
 	gl3wInit();
 	
-	vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES | NVG_DEBUG);
+	//vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES | NVG_DEBUG);
+	vg = nvgCreateGL3(NVG_ANTIALIAS);
 	
-	nvgCreateFontMem(vg, "mono", DejaVuSansMono, sizeof(DejaVuSansMono), 0);
+	nvgCreateFontMem(vg, "mono", &DejaVuSansMono[0], sizeof(DejaVuSansMono)-1, 0);
 	
 	//ImGui_ImplGlfwGL3_Init(window, false);
 	glfwSwapInterval(1);
@@ -904,15 +857,11 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	ctx->nmp_alloc = 128;
 	ctx->mp = (int*)malloc(sizeof(int)*ctx->nmp_alloc);
 	
-	glEnable(GL_STENCIL_TEST);
-	
 	while(!glfwWindowShouldClose(window)){
 		ctx->np = 0;
 		ctx->nmp_cur = 0;
 		//ImGui_ImplGlfwGL3_NewFrame();
 		
-		glClearColor(0.2f, 0.2f, 0.2f, 1.0f );
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 		
 		int winWidth, winHeight;
 		int fbWidth, fbHeight;
@@ -921,6 +870,9 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 		glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
 		const float pxRatio = (float)fbWidth / (float)winWidth;
 		glViewport(0, 0, fbWidth, fbHeight);
+	
+		glEnable(GL_STENCIL_TEST);
+		glClearColor(0.2f, 0.2f, 0.2f, 1.0f );
 		glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
 		nvgBeginFrame(vg, winWidth, winHeight, pxRatio);
 //printf("window size: %d, %d\n", winWidth, winHeight);
@@ -929,26 +881,40 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 		
 		nvgReset(vg);
 		nvgTranslate(vg, 0.5*winWidth, 0.5*winHeight);
-		nvgScale(vg, mindim, -mindim);
+		nvgScale(vg, mindim, mindim);
 		nvgTranslate(vg, viz_state.view_center[0], viz_state.view_center[1]);
 		nvgScale(vg, viz_state.view_scale, viz_state.view_scale);
 		nvgRotate(vg, viz_state.view_angle * M_PI/180);
+		/*
+		nvgStrokeColor(vg, nvgRGBA(255,192,0,255));
+		nvgBeginPath(vg);
+		nvgCircle(vg, 10, 10, 2);
+		nvgStroke(vg);
+		nvgBeginPath(vg);
+		nvgCircle(vg, 100, 10, 2);
+		nvgStroke(vg);
+		nvgBeginPath(vg);
+		nvgCircle(vg, 10, 100, 2);
+		nvgStroke(vg);
+		*/
 		if(0){
 			float xform[6];
 			nvgCurrentTransform(vg, xform);
 			printf("cur xform: %f, %f, %f\n           %f, %f, %f\n", xform[0], xform[2], xform[4], xform[1], xform[3], xform[5]);
 		}
-		PyObject *arglist = Py_BuildValue("(O)", ctx);
-		if(NULL == arglist){
-			// Handle error
-		}else{
-			PyObject *result = PyObject_CallObject(func, arglist);
-			Py_DECREF(arglist);
-			if(NULL == result){
-				PyErr_Print();
-				break;
+		if(1){
+			PyObject *arglist = Py_BuildValue("(O)", ctx);
+			if(NULL == arglist){
+				// Handle error
 			}else{
-				Py_DECREF(result);
+				PyObject *result = PyObject_CallObject(func, arglist);
+				Py_DECREF(arglist);
+				if(NULL == result){
+					PyErr_Print();
+					break;
+				}else{
+					Py_DECREF(result);
+				}
 			}
 		}
 		// Draw selection for point
@@ -956,21 +922,9 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 			const double x = ctx->p[viz_state.moused_point].p[0];
 			const double y = ctx->p[viz_state.moused_point].p[1];
 			nvgBeginPath(vg);
-			double pr = 0;
-			if(viz_state.point_size > 0){
-				const double mindim = viz_state.window_size[2];
-				pr = viz_state.point_size/(viz_state.view_scale*mindim);
-			}else if(viz_state.point_size < 0){
-				pr = -viz_state.point_size;
-			}
+			const double pr = viz_get_coord_size(viz_state.point_size);
 			nvgCircle(vg, x, y, 1.5*pr);
-			double lw = 0;
-			if(viz_state.line_width > 0){
-				const double mindim = viz_state.window_size[2];
-				lw = viz_state.line_width/(viz_state.view_scale*mindim);
-			}else if(viz_state.line_width < 0){
-				lw = -viz_state.line_width;
-			}
+			const double lw = viz_get_coord_size(viz_state.line_width);
 			nvgStrokeWidth(ctx->vg, lw);
 			nvgStrokeColor(vg, nvgRGBA(255,192,0,255));
 			nvgStroke(vg);
