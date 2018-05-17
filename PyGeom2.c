@@ -947,6 +947,14 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 				pr = -viz_state.point_size;
 			}
 			nvgCircle(vg, x, y, 1.5*pr);
+			double lw = 0;
+			if(viz_state.line_width > 0){
+				const double mindim = viz_state.window_size[2];
+				lw = viz_state.line_width/(viz_state.view_scale*mindim);
+			}else if(viz_state.line_width < 0){
+				lw = -viz_state.line_width;
+			}
+			nvgStrokeWidth(ctx->vg, lw);
 			nvgStrokeColor(vg, nvgRGBA(255,192,0,255));
 			nvgStroke(vg);
 		}
