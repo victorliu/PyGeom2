@@ -3,12 +3,23 @@
 
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
+#include <float.h>
 
 #include "nanovg/src/nanovg.h"
 #define NANOVG_GL3_IMPLEMENTATION
 #include "nanovg/src/nanovg_gl.h"
 
 #include "fonts/dejavu.h"
+
+static double tween(double x0){
+	static const double initial_slope = 0.1;
+	static const double a = 2*(1-initial_slope);
+	double x = x0;
+	if(x0 > 0.5){ x = 1-x; }
+	double y = a*(x+initial_slope)*x;
+	if(x0 > 0.5){ y = 1-y; }
+	return y;
+}
 
 //#include "imgui_impl_glfw_gl3.cpp"
 static int PyBoolean_converter(PyObject *arg, int *result){
@@ -87,10 +98,20 @@ static int halfwidth_converter(PyObject *arg, double *result){
 	return 0;
 }
 
-struct{
-	double view_center[2];
-	double view_scale;
-	double view_angle;
+typedef struct{
+	double center[2];
+	double scale;
+	double angle; // CCW, in degrees
+} view_state;
+
+typedef struct{
+	view_state view;
+	view_state view_targ;
+	view_state view_prev;
+	
+	int tween_num_timesteps;
+	int tween_timesteps_remaining;
+	
 	double view_grid; // if nonzero, then draw grid
 	
 	int window_size[3]; // 3rd element is minimum of first two
@@ -105,75 +126,56 @@ struct{
 	float default_color[4];
 } viz_state;
 
-void init_viz_state(){
-	viz_state.view_center[0] = 0;
-	viz_state.view_center[1] = 0;
-	viz_state.view_scale = 1;
-	viz_state.view_angle = 0;
-	viz_state.view_grid = 0;
+void init_viz_state(viz_state *v){
+	v->view.center[0] = 0;
+	v->view.center[1] = 0;
+	v->view.scale = 1;
+	v->view.angle = 0;
 	
-	viz_state.window_size[0] = 800;
-	viz_state.window_size[1] = 600;
-	viz_state.window_size[2] = 600;
+	v->view_targ.center[0] = 0;
+	v->view_targ.center[1] = 0;
+	v->view_targ.scale = 1;
+	v->view_targ.angle = 0;
 	
-	viz_state.mouse_button_down[0] = 0;
-	viz_state.mouse_button_down[1] = 0;
-	viz_state.mouse_button_down[2] = 0;
-	viz_state.mouse_down_pos[0] = 0;
-	viz_state.mouse_down_pos[1] = 0;
-	viz_state.mouse_down_center[0] = 0;
-	viz_state.mouse_down_center[1] = 0;
-	viz_state.moused_point = -1;
+	v->view_prev.center[0] = 0;
+	v->view_prev.center[1] = 0;
+	v->view_prev.scale = 1;
+	v->view_prev.angle = 0;
 	
-	viz_state.point_size = -4;
-	viz_state.line_width = -2;
+	v->tween_num_timesteps = 20;
+	v->tween_timesteps_remaining = 0;
 	
-	viz_state.default_color[0] = 1.00f;
-	viz_state.default_color[1] = 0.75f;
-	viz_state.default_color[2] = 0.00f;
-	viz_state.default_color[3] = 1.00f;
+	v->view_grid = 0;
+	
+	v->window_size[0] = 800;
+	v->window_size[1] = 600;
+	v->window_size[2] = 600;
+	
+	v->mouse_button_down[0] = 0;
+	v->mouse_button_down[1] = 0;
+	v->mouse_button_down[2] = 0;
+	v->mouse_down_pos[0] = 0;
+	v->mouse_down_pos[1] = 0;
+	v->mouse_down_center[0] = 0;
+	v->mouse_down_center[1] = 0;
+	v->moused_point = -1;
+	
+	v->point_size = -4;
+	v->line_width = -2;
+	
+	v->default_color[0] = 1.00f;
+	v->default_color[1] = 0.75f;
+	v->default_color[2] = 0.00f;
+	v->default_color[3] = 1.00f;
 }
 
-double viz_get_coord_size(double s){
+double viz_state_get_coord_size(const viz_state *v, double s){
 	if(s < 0){
-		const double mindim = viz_state.window_size[2];
-		return -s/(viz_state.view_scale*mindim);
+		const double r = v->view.scale/v->window_size[2];
+		return -s*r;
 	}
 	return s;
 }
-
-void viz_screen_to_coord(const double *screen, double *coord){
-	const double mindim = viz_state.window_size[2];
-	coord[0] = ((screen[0] - 0.5*viz_state.window_size[0])/mindim - viz_state.view_center[0]) / viz_state.view_scale;
-	coord[1] = ((screen[1] - 0.5*viz_state.window_size[1])/mindim - viz_state.view_center[1]) / viz_state.view_scale;
-	if(0 != viz_state.view_angle){
-		const double cs = cos(viz_state.view_angle/180*M_PI);
-		const double sn = sin(viz_state.view_angle/180*M_PI);
-		double t = cs*coord[0] + sn*coord[1];
-		coord[1] = cs*coord[1] - sn*coord[0];
-		coord[0] = t;
-	}
-}
-void viz_coord_to_screen(const double *coord, double *screen){
-	// translate center to origin
-	// Apply scale and rotation
-	double tc[2] = {
-		coord[0]*viz_state.view_scale,
-		coord[1]*viz_state.view_scale
-	};
-	if(0 != viz_state.view_angle){
-		const double cs = cos(viz_state.view_angle/180*M_PI);
-		const double sn = sin(viz_state.view_angle/180*M_PI);
-		double t = cs*tc[0] - sn*tc[1];
-		tc[1] = cs*tc[1] + sn*tc[0];
-		tc[0] = t;
-	}
-	tc[0] += viz_state.view_center[0];
-	tc[1] += viz_state.view_center[1];
-	screen[0] = viz_state.window_size[0]*0.5*(tc[0]+1);
-	screen[1] = viz_state.window_size[1]*0.5*(tc[1]+1);
-}
-
 
 
 ////////////////////////////////////////////////////////
@@ -211,6 +213,11 @@ static PyObject* Point_sub(PyObject *o1, PyObject *o2); // p - v
 static PyNumberMethods Vector_number_methods = {
 	.nb_add = Vector_add
 };
+PyObject* Vector_repr(Vector *v){
+	char str[64];
+	snprintf(str, 64, "[%f, %f]", v->v[0], v->v[1]);
+	return PyUnicode_FromString(str);
+}
 static PyTypeObject VectorType = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "PyGeom2.Vector",
@@ -220,6 +227,7 @@ static PyTypeObject VectorType = {
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
 	//.tp_new = Point_new,
 	//.tp_init = (initproc)Point_init,
+	.tp_repr = (reprfunc)Vector_repr,
 	.tp_dealloc = (destructor)Vector_dealloc,
 	.tp_members = Vector_members,
 	.tp_methods = Vector_methods,
@@ -252,6 +260,9 @@ static PyMethodDef Point_methods[] = {
 	//{"name", (PyCFunction)Noddy_name, METH_NOARGS, "Return the name, combining the first and last name" },
 	{NULL}  /* Sentinel */
 };
+
+static PyObject* Point_repr(Point *p);
+
 static PyTypeObject PointType = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "PyGeom2.Point",
@@ -261,6 +272,7 @@ static PyTypeObject PointType = {
 	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     //.tp_new = Point_new,
     //.tp_init = (initproc)Point_init,
+    .tp_repr = (reprfunc)Point_repr,
     .tp_dealloc = (destructor)Point_dealloc,
     .tp_methods = Point_methods,
 };
@@ -313,6 +325,7 @@ static int vertexlist_converter(PyObject *arg, vertexlist *result){
 typedef struct{
 	PyObject_HEAD
 	NVGcontext* vg;
+	viz_state viz;
 	double t;
 	
 	int np;
@@ -325,6 +338,8 @@ typedef struct{
 	int *mp;
 	
 	int nmp_cur;
+	
+	double bound[4];
 } GraphicsContext;
 
 static PyObject *GraphicsContext_save(GraphicsContext *ctx, PyObject *args);
@@ -378,6 +393,18 @@ static PyTypeObject GraphicsContextType = {
 	.tp_methods = GraphicsContext_methods,
 };
 
+static PyObject* Point_repr(Point *p){
+	char str[64];
+	double x, y;
+	const int i = p->i;
+	if(NULL == p->g){ return NULL; }
+	GraphicsContext *ctx = (GraphicsContext*)p->g;
+	x = ctx->p[i].p[0];
+	y = ctx->p[i].p[1];
+	snprintf(str, 64, "(%f, %f)", x, y);
+	return PyUnicode_FromString(str);
+}
+
 static PyObject *GraphicsContext_save(GraphicsContext *ctx, PyObject *args){
 	nvgSave(ctx->vg);
 	Py_RETURN_NONE;
@@ -416,10 +443,10 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 	int moveable = 0;
 	double x = 0, y = 0;
 	NVGcolor color;
-	color.rgba[0] = viz_state.default_color[0];
-	color.rgba[1] = viz_state.default_color[1];
-	color.rgba[2] = viz_state.default_color[2];
-	color.rgba[3] = viz_state.default_color[3];
+	color.rgba[0] = ctx->viz.default_color[0];
+	color.rgba[1] = ctx->viz.default_color[1];
+	color.rgba[2] = ctx->viz.default_color[2];
+	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"x", "y", "name", "moveable", "color", NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "dd|O!O&O&:point", kwlist,
 		&x, &y,
@@ -459,9 +486,15 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 		ctx->p[p->i].p[0] = x;
 		ctx->p[p->i].p[1] = y;
 	}
+	
+	if(x < ctx->bound[0]){ ctx->bound[0] = x; }
+	if(y < ctx->bound[1]){ ctx->bound[1] = y; }
+	if(x > ctx->bound[2]){ ctx->bound[2] = x; }
+	if(y > ctx->bound[3]){ ctx->bound[3] = y; }
+	
 	//printf("point(%f, %f)\n", p->p[0], p->p[1]);
 	nvgBeginPath(ctx->vg);
-	const double pr = viz_get_coord_size(viz_state.point_size);
+	const double pr = viz_state_get_coord_size(&ctx->viz, ctx->viz.point_size);
 	nvgCircle(ctx->vg, x, y, pr);
 	nvgFillColor(ctx->vg, color);
 	nvgFill(ctx->vg);
@@ -470,10 +503,10 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
 	Point *pfrom = NULL, *pto = NULL;
 	NVGcolor color;
-	color.rgba[0] = viz_state.default_color[0];
-	color.rgba[1] = viz_state.default_color[1];
-	color.rgba[2] = viz_state.default_color[2];
-	color.rgba[3] = viz_state.default_color[3];
+	color.rgba[0] = ctx->viz.default_color[0];
+	color.rgba[1] = ctx->viz.default_color[1];
+	color.rgba[2] = ctx->viz.default_color[2];
+	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"from", "to", "stroke", /*"arrow_from", "arrow_to", "dashing",*/ NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!|O&:line", kwlist,
 		&PointType, (PyObject**)&pfrom,
@@ -484,7 +517,7 @@ static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyOb
 	nvgBeginPath(ctx->vg);
 	nvgMoveTo(ctx->vg, ctx->p[pfrom->i].p[0], ctx->p[pfrom->i].p[1]);
 	nvgLineTo(ctx->vg, ctx->p[  pto->i].p[0], ctx->p[  pto->i].p[1]);
-	const double lw = viz_get_coord_size(viz_state.line_width);
+	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgStrokeColor(ctx->vg, color);
 	nvgStroke(ctx->vg);
@@ -498,10 +531,10 @@ static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObj
 	double stop = 360;
 	int clockwise = 0;
 	NVGcolor color;
-	color.rgba[0] = viz_state.default_color[0];
-	color.rgba[1] = viz_state.default_color[1];
-	color.rgba[2] = viz_state.default_color[2];
-	color.rgba[3] = viz_state.default_color[3];
+	color.rgba[0] = ctx->viz.default_color[0];
+	color.rgba[1] = ctx->viz.default_color[1];
+	color.rgba[2] = ctx->viz.default_color[2];
+	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"center", "radius", "start", "stop", "clockwise", "stroke", /*"arrow_from", "arrow_to", "dashing",*/ NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|ddO&:arc", kwlist,
 		&PointType, (PyObject**)&pcenter,
@@ -515,7 +548,7 @@ static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObj
 	
 	nvgBeginPath(ctx->vg);
 	nvgArc(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], radius, start, stop, clockwise ? NVG_CW : NVG_CCW);
-	const double lw = viz_get_coord_size(viz_state.line_width);
+	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgStrokeColor(ctx->vg, color);
 	nvgStroke(ctx->vg);
@@ -527,10 +560,10 @@ static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyOb
 	PyObject *str = NULL;
 	double size = 1;
 	NVGcolor color;
-	color.rgba[0] = viz_state.default_color[0];
-	color.rgba[1] = viz_state.default_color[1];
-	color.rgba[2] = viz_state.default_color[2];
-	color.rgba[3] = viz_state.default_color[3];
+	color.rgba[0] = ctx->viz.default_color[0];
+	color.rgba[1] = ctx->viz.default_color[1];
+	color.rgba[2] = ctx->viz.default_color[2];
+	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"base", "string", "size", "color", /*"arrow_from", "arrow_to", "dashing",*/ NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!|dO&:text", kwlist,
 		&PointType, (PyObject**)&pbase,
@@ -538,7 +571,7 @@ static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyOb
 		&size,
 		&color_converter, &color.rgba[0]
 	)){ return NULL; }
-	size = viz_get_coord_size(size);
+	size = viz_state_get_coord_size(&ctx->viz, size);
 	
 	nvgFontSize(ctx->vg, size);
 	nvgFontFace(ctx->vg, "mono");
@@ -557,10 +590,10 @@ static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, Py
 	Point *pcenter = NULL;
 	double radius = 0;
 	NVGcolor stroke_color;
-	stroke_color.rgba[0] = viz_state.default_color[0];
-	stroke_color.rgba[1] = viz_state.default_color[1];
-	stroke_color.rgba[2] = viz_state.default_color[2];
-	stroke_color.rgba[3] = viz_state.default_color[3];
+	stroke_color.rgba[0] = ctx->viz.default_color[0];
+	stroke_color.rgba[1] = ctx->viz.default_color[1];
+	stroke_color.rgba[2] = ctx->viz.default_color[2];
+	stroke_color.rgba[3] = ctx->viz.default_color[3];
 	NVGcolor fill_color = { .rgba={0} };
 	static char *kwlist[] = {"center", "radius", "stroke", "fill", /*"dashing",*/ NULL};;
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|O&O&:circle", kwlist,
@@ -572,7 +605,7 @@ static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, Py
 	
 	nvgBeginPath(ctx->vg);
 	nvgCircle(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], radius);
-	const double lw = viz_get_coord_size(viz_state.line_width);
+	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -585,10 +618,10 @@ static PyObject *GraphicsContext_ellipse(GraphicsContext *ctx, PyObject *args, P
 	Point *pcenter = NULL;
 	double halfwidth[2] = {0,0};
 	NVGcolor stroke_color;
-	stroke_color.rgba[0] = viz_state.default_color[0];
-	stroke_color.rgba[1] = viz_state.default_color[1];
-	stroke_color.rgba[2] = viz_state.default_color[2];
-	stroke_color.rgba[3] = viz_state.default_color[3];
+	stroke_color.rgba[0] = ctx->viz.default_color[0];
+	stroke_color.rgba[1] = ctx->viz.default_color[1];
+	stroke_color.rgba[2] = ctx->viz.default_color[2];
+	stroke_color.rgba[3] = ctx->viz.default_color[3];
 	NVGcolor fill_color = { .rgba={0} };
 	static char *kwlist[] = {"center", "halfwidths", "stroke", "fill", /*"dashing",*/ NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!O&|O&O&:ellipse", kwlist,
@@ -600,7 +633,7 @@ static PyObject *GraphicsContext_ellipse(GraphicsContext *ctx, PyObject *args, P
 	
 	nvgBeginPath(ctx->vg);
 	nvgEllipse(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], halfwidth[0], halfwidth[1]);
-	const double lw = viz_get_coord_size(viz_state.line_width);
+	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -613,10 +646,10 @@ static PyObject *GraphicsContext_rect(GraphicsContext *ctx, PyObject *args, PyOb
 	Point *pcenter = NULL;
 	double halfwidth[2] = {0,0};
 	NVGcolor stroke_color;
-	stroke_color.rgba[0] = viz_state.default_color[0];
-	stroke_color.rgba[1] = viz_state.default_color[1];
-	stroke_color.rgba[2] = viz_state.default_color[2];
-	stroke_color.rgba[3] = viz_state.default_color[3];
+	stroke_color.rgba[0] = ctx->viz.default_color[0];
+	stroke_color.rgba[1] = ctx->viz.default_color[1];
+	stroke_color.rgba[2] = ctx->viz.default_color[2];
+	stroke_color.rgba[3] = ctx->viz.default_color[3];
 	NVGcolor fill_color = { .rgba={0} };
 	static char *kwlist[] = {"center", "halfwidths", "stroke", "fill", /*"dashing",*/ NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!O&|O&O&:rect", kwlist,
@@ -633,7 +666,7 @@ static PyObject *GraphicsContext_rect(GraphicsContext *ctx, PyObject *args, PyOb
 	nvgLineTo(ctx->vg, c[0] + halfwidth[0], c[1] + halfwidth[1]);
 	nvgLineTo(ctx->vg, c[0] - halfwidth[0], c[1] + halfwidth[1]);
 	nvgClosePath(ctx->vg);
-	const double lw = viz_get_coord_size(viz_state.line_width);
+	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -646,10 +679,10 @@ static PyObject *GraphicsContext_polygon(GraphicsContext *ctx, PyObject *args, P
 	vertexlist vlist;
 	vertexlist_init(&vlist);
 	NVGcolor stroke_color;
-	stroke_color.rgba[0] = viz_state.default_color[0];
-	stroke_color.rgba[1] = viz_state.default_color[1];
-	stroke_color.rgba[2] = viz_state.default_color[2];
-	stroke_color.rgba[3] = viz_state.default_color[3];
+	stroke_color.rgba[0] = ctx->viz.default_color[0];
+	stroke_color.rgba[1] = ctx->viz.default_color[1];
+	stroke_color.rgba[2] = ctx->viz.default_color[2];
+	stroke_color.rgba[3] = ctx->viz.default_color[3];
 	NVGcolor fill_color = { .rgba={0} };
 	static char *kwlist[] = {"vertices", "stroke", "fill", /*"dashing",*/ NULL};
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O&|O&O&:rect", kwlist,
@@ -670,7 +703,7 @@ static PyObject *GraphicsContext_polygon(GraphicsContext *ctx, PyObject *args, P
 		}
 	}
 	nvgClosePath(ctx->vg);
-	const double lw = viz_get_coord_size(viz_state.line_width);
+	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
 	nvgFill(ctx->vg);
@@ -682,6 +715,15 @@ static PyObject *GraphicsContext_polygon(GraphicsContext *ctx, PyObject *args, P
 
 ////////////////////////////////////////////////////////
 
+static void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods){
+	if(GLFW_PRESS == action){
+		switch(key){
+		case GLFW_KEY_ESCAPE:
+			glfwSetWindowShouldClose(window, GL_TRUE); break;
+		default: break;
+		}
+	}
+}
 /*
 static void char_callback(GLFWwindow*, unsigned int c){
 	ImGuiIO& io = ImGui::GetIO();
@@ -691,57 +733,66 @@ static void char_callback(GLFWwindow*, unsigned int c){
 }
 */
 static void glfw_framebuffer_size_callback(GLFWwindow* window, int w, int h){
-	viz_state.window_size[0] = w;
-	viz_state.window_size[1] = h;
-	viz_state.window_size[2] = (w < h ? w : h);
-	if(viz_state.window_size[2] < 1){ viz_state.window_size[2] = 1; }
+	GraphicsContext *ctx = (GraphicsContext*)glfwGetWindowUserPointer(window);
+	ctx->viz.window_size[0] = w;
+	ctx->viz.window_size[1] = h;
+	ctx->viz.window_size[2] = (w < h ? w : h);
+	if(ctx->viz.window_size[2] < 1){ ctx->viz.window_size[2] = 1; }
 	glViewport(0, 0, w, h);
 }
 static void glfw_mouse_button_callback(GLFWwindow* window, int button, int action, int mods){
+	GraphicsContext *ctx = (GraphicsContext*)glfwGetWindowUserPointer(window);
 	//const ImGuiIO& io = ImGui::GetIO();
 	//if(io.WantCaptureMouse){ return; }
 	if(!(0 <= button && button < 3)){ return; }
 	if(action == GLFW_PRESS){
-		viz_state.mouse_button_down[button] = 1;
-		glfwGetCursorPos(window, &viz_state.mouse_down_pos[0], &viz_state.mouse_down_pos[1]);
-		viz_state.mouse_down_pos[1] = viz_state.window_size[1] - viz_state.mouse_down_pos[1];
-		viz_state.mouse_down_center[0] = viz_state.view_center[0];
-		viz_state.mouse_down_center[1] = viz_state.view_center[1];
-//printf("Clicked at glfw (%f, %f)\n", viz_state.mouse_down_pos[0], viz_state.mouse_down_pos[1]);
-double pos[2];
-viz_screen_to_coord(viz_state.mouse_down_pos, pos);
-printf("  canvas point (%f, %f)\n", pos[0], pos[1]);
+		ctx->viz.mouse_button_down[button] = 1;
+		glfwGetCursorPos(window, &ctx->viz.mouse_down_pos[0], &ctx->viz.mouse_down_pos[1]);
+		ctx->viz.mouse_down_pos[1] = ctx->viz.window_size[1] - ctx->viz.mouse_down_pos[1];
+		ctx->viz.mouse_down_center[0] = ctx->viz.view.center[0];
+		ctx->viz.mouse_down_center[1] = ctx->viz.view.center[1];
+		float pos[2];
+		float xform[6], xformi[6], r[2];
+		const float src[2] = { ctx->viz.mouse_down_pos[0], ctx->viz.mouse_down_pos[1] };
+		nvgCurrentTransform(ctx->vg, xform);
+		nvgTransformInverse(xformi, xform);
+		nvgTransformPoint(&pos[0], &pos[1], xformi, src[0], src[1]);
+		printf("Click pos: (%f, %f)\n", pos[0], pos[1]);
+		fflush(stdout);
 	}else if(action == GLFW_RELEASE){
-		viz_state.mouse_button_down[button] = 0;
+		ctx->viz.mouse_button_down[button] = 0;
 	}
 }
 static void glfw_cursor_callback(GLFWwindow* window, double x, double y){
-	y = viz_state.window_size[1] - y;
-	const double xy[2] = {x, y};
-	double coord[2];
-	viz_screen_to_coord(xy, coord);
 	GraphicsContext *ctx = (GraphicsContext*)glfwGetWindowUserPointer(window);
+	y = ctx->viz.window_size[1] - y;
+	float coord[2];
+	float xform[6], xformi[6], r[2];
+	nvgCurrentTransform(ctx->vg, xform);
+	nvgTransformInverse(xformi, xform);
+	nvgTransformPoint(&coord[0], &coord[1], xformi, x, y);
+	
 	//const ImGuiIO& io = ImGui::GetIO();
 	//if(io.WantCaptureMouse){ return; }
-	if(viz_state.mouse_button_down[0]){
-		if(viz_state.moused_point < 0){ // if no selected point, drag view
-			const double mindim = viz_state.window_size[2];
-			const double curscale = 1/mindim;//viz_state.view_scale / mindim;
-			viz_state.view_center[0] = curscale * (x - viz_state.mouse_down_pos[0]) + viz_state.mouse_down_center[0];
-			viz_state.view_center[1] = curscale * (y - viz_state.mouse_down_pos[1]) + viz_state.mouse_down_center[1];
-		}else if(0 <= viz_state.moused_point && viz_state.moused_point < ctx->np && (ctx->p[viz_state.moused_point].flags & GPOINT_MOVEABLE)){
-			ctx->p[viz_state.moused_point].p[0] = coord[0];
-			ctx->p[viz_state.moused_point].p[1] = coord[1];
+	if(ctx->viz.mouse_button_down[0]){
+		if(ctx->viz.moused_point < 0){ // if no selected point, drag view
+			const double mindim = ctx->viz.window_size[2];
+			const double curscale = ctx->viz.view.scale / mindim;
+			ctx->viz.view.center[0] = curscale * (ctx->viz.mouse_down_pos[0] - x) + ctx->viz.mouse_down_center[0];
+			ctx->viz.view.center[1] = curscale * (ctx->viz.mouse_down_pos[1] - y) + ctx->viz.mouse_down_center[1];
+		}else if(0 <= ctx->viz.moused_point && ctx->viz.moused_point < ctx->np && (ctx->p[ctx->viz.moused_point].flags & GPOINT_MOVEABLE)){
+			ctx->p[ctx->viz.moused_point].p[0] = coord[0];
+			ctx->p[ctx->viz.moused_point].p[1] = coord[1];
 		}
-	}else if(viz_state.mouse_button_down[1]){
-	}else if(viz_state.mouse_button_down[2]){
+	}else if(ctx->viz.mouse_button_down[1]){
+	}else if(ctx->viz.mouse_button_down[2]){
 	}else{
 		int i;
-		double dd_threshold = viz_get_coord_size(viz_state.point_size);
+		double dd_threshold = viz_state_get_coord_size(&ctx->viz, ctx->viz.point_size);
 		dd_threshold *= 1.5;
 		dd_threshold *= dd_threshold;
 		
-		viz_state.moused_point = -1;
+		ctx->viz.moused_point = -1;
 		for(i = 0; i < ctx->nmp; ++i){
 			const int j = ctx->mp[i];
 			const double d[2] = {
@@ -750,13 +801,14 @@ static void glfw_cursor_callback(GLFWwindow* window, double x, double y){
 			};
 			const double dd = d[0]*d[0]+d[1]*d[1];
 			if(dd < dd_threshold){
-				viz_state.moused_point = j;
+				ctx->viz.moused_point = j;
 				break;
 			}
 		}
 	}
 }
 static void glfw_mouse_scroll_callback(GLFWwindow* window, double x, double y){
+	GraphicsContext *ctx = (GraphicsContext*)glfwGetWindowUserPointer(window);
 	//g_MouseWheel += (float)y; // Use fractional mouse wheel, 1.0 unit 5 lines.
 	//const ImGuiIO& io = ImGui::GetIO();
 	//if(io.WantCaptureMouse){ return; }
@@ -764,21 +816,22 @@ static void glfw_mouse_scroll_callback(GLFWwindow* window, double x, double y){
 	if(0 != y){
 		double view_scale_factor = 1;
 		if(y > 0){
-			view_scale_factor = 1./0.95;
-		}else{
 			view_scale_factor = 0.95;
+		}else{
+			view_scale_factor = 1./0.95;
 		}
-		viz_state.view_scale *= view_scale_factor;
+		ctx->viz.view.scale *= view_scale_factor;
 		{ // apply translation to keep point under the cursor fixed
 			glfwGetCursorPos(window, &x, &y);
-			y = viz_state.window_size[1] - y;
-			const double mindim = viz_state.window_size[2];
-			const double r[2] = {
-				(x - 0.5*viz_state.window_size[0])/mindim,
-				(y - 0.5*viz_state.window_size[1])/mindim
-			};
-			viz_state.view_center[0] = r[0] + view_scale_factor * (viz_state.view_center[0] - r[0]);
-			viz_state.view_center[1] = r[1] + view_scale_factor * (viz_state.view_center[1] - r[1]);
+			y = ctx->viz.window_size[1] - y;
+			
+			float xform[6], xformi[6], r[2];
+			const float src[2] = { x, y };
+			nvgCurrentTransform(ctx->vg, xform);
+			nvgTransformInverse(xformi, xform);
+			nvgTransformPoint(&r[0], &r[1], xformi, src[0], src[1]);
+			ctx->viz.view.center[0] = r[0] - (r[0] - ctx->viz.view.center[0]) * view_scale_factor;
+			ctx->viz.view.center[1] = r[1] - (r[1] - ctx->viz.view.center[1]) * view_scale_factor;
 		}
 	}
 }
@@ -818,10 +871,10 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 #endif
 	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, 1);
 	
-	init_viz_state();
-	viz_state.view_grid = grid;
+	init_viz_state(&ctx->viz);
+	ctx->viz.view_grid = grid;
 	
-	window = glfwCreateWindow(viz_state.window_size[0], viz_state.window_size[1], "PyGeom2", NULL, NULL);
+	window = glfwCreateWindow(ctx->viz.window_size[0], ctx->viz.window_size[1], "PyGeom2", NULL, NULL);
 	if(!window){
 		glfwTerminate();
 		return PyErr_Format(PyExc_RuntimeError, "Failed to create GLFW window");
@@ -829,7 +882,7 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	glfwSetWindowUserPointer(window, (void*)ctx);
 	
 	//glfwSetCharCallback(window, char_callback);
-	//glfwSetKeyCallback(window, key_callback);
+	glfwSetKeyCallback(window, glfw_key_callback);
 	glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
 	glfwSetCursorPosCallback(window, glfw_cursor_callback);
 	glfwSetMouseButtonCallback(window, glfw_mouse_button_callback);
@@ -857,9 +910,16 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	ctx->nmp_alloc = 128;
 	ctx->mp = (int*)malloc(sizeof(int)*ctx->nmp_alloc);
 	
+	int frame0 = 1;
+	
+	glfwSwapInterval(1);
 	while(!glfwWindowShouldClose(window)){
 		ctx->np = 0;
 		ctx->nmp_cur = 0;
+		ctx->bound[0] = DBL_MAX;
+		ctx->bound[1] = DBL_MAX;
+		ctx->bound[2] = -DBL_MAX;
+		ctx->bound[3] = -DBL_MAX;
 		//ImGui_ImplGlfwGL3_NewFrame();
 		
 		
@@ -877,14 +937,47 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 		nvgBeginFrame(vg, winWidth, winHeight, pxRatio);
 //printf("window size: %d, %d\n", winWidth, winHeight);
 		// Set up base transform
-		float mindim = (winHeight < winWidth ? winHeight : winWidth);
+		
+		if(ctx->viz.tween_timesteps_remaining >= 0){
+			const double t = 1 - (double)ctx->viz.tween_timesteps_remaining / (double)ctx->viz.tween_num_timesteps;
+			const double f = tween(t);
+			ctx->viz.view.center[0] = (1-t)*ctx->viz.view_prev.center[0] + t*ctx->viz.view_targ.center[0];
+			ctx->viz.view.center[1] = (1-t)*ctx->viz.view_prev.center[1] + t*ctx->viz.view_targ.center[1];
+			ctx->viz.view.scale = (1-t)*ctx->viz.view_prev.scale + t*ctx->viz.view_targ.scale;
+			ctx->viz.view.angle = (1-t)*ctx->viz.view_prev.angle + t*ctx->viz.view_targ.angle;
+			ctx->viz.tween_timesteps_remaining--;
+		}else{
+			ctx->viz.view_prev = ctx->viz.view;
+		}
+		
+		const double mindim = ctx->viz.window_size[2];
 		
 		nvgReset(vg);
+		// Apply current transform
+		/*
 		nvgTranslate(vg, 0.5*winWidth, 0.5*winHeight);
-		nvgScale(vg, mindim, mindim);
-		nvgTranslate(vg, viz_state.view_center[0], viz_state.view_center[1]);
-		nvgScale(vg, viz_state.view_scale, viz_state.view_scale);
-		nvgRotate(vg, viz_state.view_angle * M_PI/180);
+		nvgScale(vg, mindim/ctx->viz.view.scale, mindim/ctx->viz.view.scale);
+		nvgRotate(vg, -ctx->viz.view.angle * M_PI/180);
+		nvgTranslate(vg, -ctx->viz.view.center[0], -ctx->viz.view.center[1]);
+		*/
+		if(0 == ctx->viz.view.angle){
+			const float s = (float)ctx->viz.window_size[2]/(float)ctx->viz.view.scale;
+			nvgTransform(vg,
+				s, 0, 0, s,
+				0.5*(float)winWidth  - s*(float)ctx->viz.view.center[0],
+				0.5*(float)winHeight - s*(float)ctx->viz.view.center[1]
+			);
+		}else{
+			const float s = (float)ctx->viz.window_size[2]/(float)ctx->viz.view.scale;
+			const float angle = -nvgDegToRad(ctx->viz.view.angle);
+			const float cs = cosf(angle);
+			const float sn = sinf(angle);
+			nvgTransform(vg,
+				s*cs, s*sn, -s*sn, s*cs,
+				0.5*(float)winWidth  - s*(cs*(float)ctx->viz.view.center[0]-sn*(float)ctx->viz.view.center[1]),
+				0.5*(float)winHeight - s*(cs*(float)ctx->viz.view.center[1]+sn*(float)ctx->viz.view.center[0])
+			);
+		}
 		/*
 		nvgStrokeColor(vg, nvgRGBA(255,192,0,255));
 		nvgBeginPath(vg);
@@ -917,14 +1010,23 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 				}
 			}
 		}
+		if(frame0 && ctx->bound[0] < ctx->bound[2] && ctx->bound[1] < ctx->bound[3]){ // set initial view
+			double dx = ctx->bound[2] - ctx->bound[0];
+			double dy = ctx->bound[3] - ctx->bound[1];
+			ctx->viz.view_targ.scale = (dx > dy ? dx : dy);
+			ctx->viz.view_targ.center[0] = 0.5*(ctx->bound[0] + ctx->bound[2]);
+			ctx->viz.view_targ.center[1] = 0.5*(ctx->bound[1] + ctx->bound[3]);
+			ctx->viz.view_targ.angle = 0;
+			ctx->viz.tween_timesteps_remaining = ctx->viz.tween_num_timesteps;
+		}
 		// Draw selection for point
-		if(viz_state.moused_point >= 0){
-			const double x = ctx->p[viz_state.moused_point].p[0];
-			const double y = ctx->p[viz_state.moused_point].p[1];
+		if(ctx->viz.moused_point >= 0){
+			const double x = ctx->p[ctx->viz.moused_point].p[0];
+			const double y = ctx->p[ctx->viz.moused_point].p[1];
 			nvgBeginPath(vg);
-			const double pr = viz_get_coord_size(viz_state.point_size);
+			const double pr = viz_state_get_coord_size(&ctx->viz, ctx->viz.point_size);
 			nvgCircle(vg, x, y, 1.5*pr);
-			const double lw = viz_get_coord_size(viz_state.line_width);
+			const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 			nvgStrokeWidth(ctx->vg, lw);
 			nvgStrokeColor(vg, nvgRGBA(255,192,0,255));
 			nvgStroke(vg);
@@ -943,6 +1045,7 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 		
 		glfwSwapBuffers(window);
 		glfwPollEvents();
+		frame0 = 0;
 	}
 	
 	free(ctx->mp);
