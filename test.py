@@ -9,8 +9,7 @@ def viz(g):
 	g.rect(c, (5, 6))
 	g.polygon(vertices = (a, b, c), fill = (1,2,3))
 	g.text(base=b, string = str(b), size=-18, color = (0,1,0))
-	#g.point(50,50)
-	#g.point(100,50)
-	#g.point(50,100)
+	d = c + 0.2*(b-a)
+	g.line(a,d)
 
 PyGeom2.show(viz)

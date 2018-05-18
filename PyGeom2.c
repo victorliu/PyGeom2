@@ -1,6 +1,10 @@
 #include <Python.h>
 #include "structmember.h"
 
+#if PY_MAJOR_VERSION >= 3
+#define Py_TPFLAGS_CHECKTYPES 0
+#endif
+
 #include <GL/gl3w.h>
 #include <GLFW/glfw3.h>
 #include <float.h>
@@ -192,26 +196,39 @@ static PyMemberDef Vector_members[] = {
 	{"y", T_DOUBLE, offsetof(Vector, v[1]), 0, "y coordinate"},
 	{NULL}  /* Sentinel */
 };
+
+static PyObject* Vector_norm(Vector *v, PyObject *args){
+	return PyFloat_FromDouble(hypot(v->v[0], v->v[1]));
+}
+static PyObject* Vector_angle(Vector *v, PyObject *args){
+	return PyFloat_FromDouble(180.*(atan2(v->v[1], v->v[0])/M_PI));
+}
 static PyMethodDef Vector_methods[] = {
-	//{"name", (PyCFunction)Noddy_name, METH_NOARGS, "Return the name, combining the first and last name" },
+	{"angle", (PyCFunction)Vector_angle, METH_NOARGS, "Return the angle of the vector from the x-axis" },
+	{"norm", (PyCFunction)Vector_norm, METH_NOARGS, "Return the Euclidean length of the vector" },
 	{NULL}  /* Sentinel */
 };
 
 static PyObject* Vector_add(PyObject *o1, PyObject *o2); // v + v
 static PyObject* Vector_sub(PyObject *o1, PyObject *o2); // v - v = p
 static PyObject* Vector_neg(PyObject *o1); // negation
-static PyObject* Vector_pos(PyObject *o1); // cast to point
-static PyObject* Vector_mul(PyObject *o1); // scalar multiply or dot product
-static PyObject* Vector_div(PyObject *o1); // scalar divide
-static PyObject* Vector_xor(PyObject *o1); // cross product
+static PyObject* Vector_mul(PyObject *o1, PyObject *o2); // scalar multiply or dot product
+static PyObject* Vector_div(PyObject *o1, PyObject *o2); // scalar divide
+static PyObject* Vector_xor(PyObject *o1, PyObject *o2); // cross product
 static PyObject* Vector_invert(PyObject *o1); // rot90
 
 static PyObject* Point_add(PyObject *o1, PyObject *o2); // p + v
-static PyObject* Point_sub(PyObject *o1, PyObject *o2); // p - v
+static PyObject* Point_sub(PyObject *o1, PyObject *o2); // p - v, p - p
 
 
 static PyNumberMethods Vector_number_methods = {
-	.nb_add = Vector_add
+	.nb_add = Vector_add,
+	.nb_subtract = Vector_sub,
+	.nb_multiply = Vector_mul,
+	.nb_true_divide = Vector_div,
+	.nb_negative = Vector_neg,
+	.nb_xor = Vector_xor,
+	.nb_invert = Vector_invert,
 };
 PyObject* Vector_repr(Vector *v){
 	char str[64];
@@ -224,7 +241,8 @@ static PyTypeObject VectorType = {
 	.tp_doc = "Vector object",
 	.tp_basicsize = sizeof(Vector),
 	.tp_itemsize = 0,
-	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+	.tp_as_number = &Vector_number_methods,
+	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_CHECKTYPES,
 	//.tp_new = Point_new,
 	//.tp_init = (initproc)Point_init,
 	.tp_repr = (reprfunc)Vector_repr,
@@ -232,10 +250,120 @@ static PyTypeObject VectorType = {
 	.tp_members = Vector_members,
 	.tp_methods = Vector_methods,
 };
+static int Vector_check(PyObject *obj){
+	return PyObject_TypeCheck(obj, &VectorType);
+}
 
-static PyObject* Vector_add(PyObject *o1, PyObject *o2){
-	//if(PyT
-	return NULL;
+static PyObject* Vector_add(PyObject *o1, PyObject *o2){ // v + v
+	if(!Vector_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Point on LHS of plus operator");
+	}
+	if(!Vector_check(o2)){
+		return PyErr_Format(PyExc_TypeError, "expected Point on RHS of plus operator");
+	}
+	Vector *lhs = (Vector*)o1;
+	Vector *rhs = (Vector*)o2;
+	Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+	if(NULL == v){
+		PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+	}
+	v->v[0] = lhs->v[0] + rhs->v[0];
+	v->v[1] = lhs->v[1] + rhs->v[1];
+	return (PyObject*)v;
+}
+
+static PyObject* Vector_sub(PyObject *o1, PyObject *o2){ // v - v
+	if(!Vector_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector on LHS of minus operator");
+	}
+	if(!Vector_check(o2)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector on RHS of minus operator");
+	}
+	Vector *lhs = (Vector*)o1;
+	Vector *rhs = (Vector*)o2;
+	Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+	if(NULL == v){
+		PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+	}
+	v->v[0] = lhs->v[0] - rhs->v[0];
+	v->v[1] = lhs->v[1] - rhs->v[1];
+	return (PyObject*)v;
+}
+static PyObject* Vector_neg(PyObject *o1){
+	if(!Vector_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector");
+	}
+	Vector *u = (Vector*)o1;
+	Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+	if(NULL == v){
+		PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+	}
+	v->v[0] = -u->v[0];
+	v->v[1] = -u->v[1];
+	return (PyObject*)v;
+}
+static PyObject* Vector_mul(PyObject *o1, PyObject *o2){
+	if(!Vector_check(o2)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector on RHS of multiplication operator");
+	}
+	Vector *rhs = (Vector*)o2;
+	if(Vector_check(o1)){ // scalar dot product
+		Vector *lhs = (Vector*)o1;
+		return PyFloat_FromDouble(lhs->v[0]*rhs->v[0] + lhs->v[1]*rhs->v[1]);
+	}else if(PyFloat_Check(o1)){
+		double s = PyFloat_AsDouble(o1);
+		Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+		if(NULL == v){
+			PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+		}
+		v->v[0] = s*rhs->v[0];
+		v->v[1] = s*rhs->v[1];
+		return (PyObject*)v;
+	}else{
+		return PyErr_Format(PyExc_TypeError, "expected number or Vector on LHS of multiplication operator");
+	}
+}
+static PyObject* Vector_div(PyObject *o1, PyObject *o2){
+	if(!Vector_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector on LHS of division operator");
+	}
+	Vector *lhs = (Vector*)o1;
+	if(PyFloat_Check(o2)){
+		double s = PyFloat_AsDouble(o2);
+		Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+		if(NULL == v){
+			PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+		}
+		v->v[0] = lhs->v[0]/s;
+		v->v[1] = lhs->v[1]/s;
+		return (PyObject*)v;
+	}else{
+		return PyErr_Format(PyExc_TypeError, "expected number on RHS of division operator");
+	}
+}
+static PyObject* Vector_xor(PyObject *o1, PyObject *o2){
+	if(!Vector_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector on LHS of ^ operator");
+	}
+	Vector *lhs = (Vector*)o1;
+	if(!Vector_check(o2)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector on RHS of ^ operator");
+	}
+	Vector *rhs = (Vector*)o2;
+	return PyFloat_FromDouble(lhs->v[0]*rhs->v[1] - lhs->v[1]*rhs->v[0]);
+}
+static PyObject* Vector_invert(PyObject *o1){
+	if(!Vector_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Vector");
+	}
+	Vector *u = (Vector*)o1;
+	Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+	if(NULL == v){
+		PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+	}
+	v->v[0] = -u->v[1];
+	v->v[1] =  u->v[0];
+	return (PyObject*)v;
 }
 
 ////////////////////////////////////////////////////////
@@ -245,10 +373,6 @@ typedef struct{
 	PyObject_HEAD
 	PyObject *g;
 	int i;
-	/*
-	double p[2];
-	PyObject *name;
-	int moveable;*/
 } Point;
 
 static void Point_dealloc(Point *self){
@@ -261,6 +385,10 @@ static PyMethodDef Point_methods[] = {
 	{NULL}  /* Sentinel */
 };
 
+static PyNumberMethods Point_number_methods = {
+	.nb_add = Point_add,
+	.nb_subtract = Point_sub,
+};
 static PyObject* Point_repr(Point *p);
 
 static PyTypeObject PointType = {
@@ -269,17 +397,23 @@ static PyTypeObject PointType = {
 	.tp_doc = "Point object",
 	.tp_basicsize = sizeof(Point),
 	.tp_itemsize = 0,
-	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-    //.tp_new = Point_new,
-    //.tp_init = (initproc)Point_init,
-    .tp_repr = (reprfunc)Point_repr,
-    .tp_dealloc = (destructor)Point_dealloc,
-    .tp_methods = Point_methods,
+	.tp_repr = (reprfunc)Point_repr,
+	.tp_as_number = &Point_number_methods,
+	.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_CHECKTYPES,
+	//.tp_new = Point_new,
+	//.tp_init = (initproc)Point_init,
+	.tp_dealloc = (destructor)Point_dealloc,
+	.tp_methods = Point_methods,
 };
+static int Point_check(PyObject *obj){
+	return PyObject_TypeCheck(obj, &PointType);
+}
+
 
 ////////////////////////////////////////////////////////
 
 #define GPOINT_MOVEABLE 0x1
+#define GPOINT_VISIBLE  0x2
 typedef struct{
 	double p[2];
 	PyObject *name;
@@ -310,7 +444,7 @@ static int vertexlist_converter(PyObject *arg, vertexlist *result){
 		result->p = (Point**)malloc(sizeof(Point*)*n);
 		for(i = 0; i < n; ++i){
 			PyObject *elem = PySequence_Fast_GET_ITEM(fast, i);
-			if(!PyObject_TypeCheck(elem, &PointType)){
+			if(!Point_check(elem)){
 				PyErr_Format(PyExc_TypeError, "element %d is not a Point object", i);
 				return 0;
 			}
@@ -393,6 +527,25 @@ static PyTypeObject GraphicsContextType = {
 	.tp_methods = GraphicsContext_methods,
 };
 
+static Point* GraphicsContext_point_add(GraphicsContext *ctx, double x, double y){
+	Point *p = (Point*)PointType.tp_alloc(&PointType, 0);
+	if(NULL == p){
+		return NULL;
+	}
+	p->g = (PyObject*)ctx;
+	if(ctx->np >= ctx->np_alloc){
+		ctx->np_alloc *= 2;
+		ctx->p = (gpoint*)realloc(ctx->p, sizeof(gpoint)*ctx->np_alloc);
+	}
+	p->i = ctx->np;
+	ctx->p[p->i].p[0] = x;
+	ctx->p[p->i].p[1] = y;
+	ctx->p[p->i].name = NULL;
+	ctx->p[p->i].flags = 0;
+	ctx->np++;
+	return p;
+}
+
 static PyObject* Point_repr(Point *p){
 	char str[64];
 	double x, y;
@@ -403,6 +556,59 @@ static PyObject* Point_repr(Point *p){
 	y = ctx->p[i].p[1];
 	snprintf(str, 64, "(%f, %f)", x, y);
 	return PyUnicode_FromString(str);
+}
+static PyObject* Point_add(PyObject *o1, PyObject *o2){ // p + v
+	if(!Point_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Point on LHS of plus operator");
+	}
+	Point *lhs = (Point*)o1;
+	if(Vector_check(o2)){
+		Point *p;
+		Vector *rhs = (Vector*)o2;
+		GraphicsContext *lg = (GraphicsContext*)lhs->g;
+		p = GraphicsContext_point_add(lg,
+			lg->p[lhs->i].p[0] + rhs->v[0],
+			lg->p[lhs->i].p[1] + rhs->v[1]
+		);
+		if(NULL == p){
+			return PyErr_Format(PyExc_MemoryError, "could not create a new Point");
+		}
+		return (PyObject*)p;
+	}else{
+		return PyErr_Format(PyExc_TypeError, "expected a Vector on RHS of plus operator");
+	}
+}
+static PyObject* Point_sub(PyObject *o1, PyObject *o2){ // p - v, p - p
+	if(!Point_check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected Point on LHS of minus operator");
+	}
+	Point *lhs = (Point*)o1;
+	if(Point_check(o2)){
+		Point *rhs = (Point*)o2;
+		Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+		if(NULL == v){
+			PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+		}
+		GraphicsContext *lg = (GraphicsContext*)lhs->g;
+		GraphicsContext *rg = (GraphicsContext*)rhs->g;
+		v->v[0] = lg->p[lhs->i].p[0] - rg->p[rhs->i].p[0];
+		v->v[1] = lg->p[lhs->i].p[1] - rg->p[rhs->i].p[1];
+		return (PyObject*)v;
+	}else if(Vector_check(o2)){
+		Point *p;
+		Vector *rhs = (Vector*)o2;
+		GraphicsContext *lg = (GraphicsContext*)lhs->g;
+		p = GraphicsContext_point_add(lg,
+			lg->p[lhs->i].p[0] - rhs->v[0],
+			lg->p[lhs->i].p[1] - rhs->v[0]
+		);
+		if(NULL == p){
+			PyErr_Format(PyExc_MemoryError, "could not create a new Point");
+		}
+		return (PyObject*)p;
+	}else{
+		return PyErr_Format(PyExc_TypeError, "expected Point or Vector on RHS of minus operator");
+	}
 }
 
 static PyObject *GraphicsContext_save(GraphicsContext *ctx, PyObject *args){
@@ -433,45 +639,33 @@ static PyObject *GraphicsContext_scale(GraphicsContext *ctx, PyObject *args){
 	Py_RETURN_NONE;
 }
 static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *p = (Point*)PointType.tp_alloc(&PointType, 0);
-	if(NULL == p){
-		return NULL;
-	}
-	p->g = (PyObject*)ctx;
-	
 	PyObject *name = NULL;
 	int moveable = 0;
+	int visible = 0;
 	double x = 0, y = 0;
 	NVGcolor color;
 	color.rgba[0] = ctx->viz.default_color[0];
 	color.rgba[1] = ctx->viz.default_color[1];
 	color.rgba[2] = ctx->viz.default_color[2];
 	color.rgba[3] = ctx->viz.default_color[3];
-	static char *kwlist[] = {"x", "y", "name", "moveable", "color", NULL};
-	if(!PyArg_ParseTupleAndKeywords(args, kwds, "dd|O!O&O&:point", kwlist,
+	static char *kwlist[] = {"x", "y", "name", "moveable", "visible", "color", NULL};
+	if(!PyArg_ParseTupleAndKeywords(args, kwds, "dd|O!O&O&O&:point", kwlist,
 		&x, &y,
 		&PyUnicode_Type, &name,
 		&PyBoolean_converter, &moveable,
+		&PyBoolean_converter, &visible,
 		&color_converter, &color.rgba[0]
 	)){ return NULL; }
 	
-	if(ctx->np >= ctx->np_alloc){
-		ctx->np_alloc *= 2;
-		ctx->p = (gpoint*)realloc(ctx->p, sizeof(gpoint)*ctx->np_alloc);
-	}
-	p->i = ctx->np;
-	ctx->p[p->i].name = name;
-	ctx->p[p->i].flags = (moveable ? GPOINT_MOVEABLE : 0);
-	ctx->np++;
-	if(NULL != name){
-		Py_INCREF(name);
-	}
+	Point *p;
 	if(moveable){
+		visible = 1;
 		if(ctx->nmp_cur >= ctx->nmp && ctx->nmp_cur < ctx->np){
 			if(ctx->nmp >= ctx->nmp_alloc){
 				ctx->nmp_alloc *= 2;
-				ctx->mp = (int*)realloc(ctx->p, sizeof(int)*ctx->nmp_alloc);
+				ctx->mp = (int*)realloc(ctx->mp, sizeof(int)*ctx->nmp_alloc);
 			}
+			p = GraphicsContext_point_add(ctx, x, y);
 			ctx->mp[ctx->nmp] = p->i;
 			ctx->nmp++;
 			
@@ -480,24 +674,36 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 		}else{
 			x = ctx->p[ctx->mp[ctx->nmp_cur]].p[0];
 			y = ctx->p[ctx->mp[ctx->nmp_cur]].p[1];
+			p = GraphicsContext_point_add(ctx, x, y);
 		}
+		ctx->p[p->i].flags |= GPOINT_MOVEABLE;
 		ctx->nmp_cur++;
 	}else{
-		ctx->p[p->i].p[0] = x;
-		ctx->p[p->i].p[1] = y;
+		p = GraphicsContext_point_add(ctx, x, y);
 	}
 	
+	if(visible){
+		ctx->p[p->i].flags |= GPOINT_VISIBLE;
+	}
+	
+	ctx->p[p->i].name = name;
+	if(NULL != name){
+		Py_INCREF(name);
+	}
+
 	if(x < ctx->bound[0]){ ctx->bound[0] = x; }
 	if(y < ctx->bound[1]){ ctx->bound[1] = y; }
 	if(x > ctx->bound[2]){ ctx->bound[2] = x; }
 	if(y > ctx->bound[3]){ ctx->bound[3] = y; }
 	
 	//printf("point(%f, %f)\n", p->p[0], p->p[1]);
-	nvgBeginPath(ctx->vg);
-	const double pr = viz_state_get_coord_size(&ctx->viz, ctx->viz.point_size);
-	nvgCircle(ctx->vg, x, y, pr);
-	nvgFillColor(ctx->vg, color);
-	nvgFill(ctx->vg);
+	if(visible){
+		nvgBeginPath(ctx->vg);
+		const double pr = viz_state_get_coord_size(&ctx->viz, ctx->viz.point_size);
+		nvgCircle(ctx->vg, x, y, pr);
+		nvgFillColor(ctx->vg, color);
+		nvgFill(ctx->vg);
+	}
 	return (PyObject *)p;
 }
 static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
@@ -780,9 +986,11 @@ static void glfw_cursor_callback(GLFWwindow* window, double x, double y){
 			const double curscale = ctx->viz.view.scale / mindim;
 			ctx->viz.view.center[0] = curscale * (ctx->viz.mouse_down_pos[0] - x) + ctx->viz.mouse_down_center[0];
 			ctx->viz.view.center[1] = curscale * (ctx->viz.mouse_down_pos[1] - y) + ctx->viz.mouse_down_center[1];
-		}else if(0 <= ctx->viz.moused_point && ctx->viz.moused_point < ctx->np && (ctx->p[ctx->viz.moused_point].flags & GPOINT_MOVEABLE)){
-			ctx->p[ctx->viz.moused_point].p[0] = coord[0];
-			ctx->p[ctx->viz.moused_point].p[1] = coord[1];
+		}else{
+			if(0 <= ctx->viz.moused_point && ctx->viz.moused_point < ctx->np && (ctx->p[ctx->viz.moused_point].flags & GPOINT_MOVEABLE)){
+				ctx->p[ctx->viz.moused_point].p[0] = coord[0];
+				ctx->p[ctx->viz.moused_point].p[1] = coord[1];
+			}
 		}
 	}else if(ctx->viz.mouse_button_down[1]){
 	}else if(ctx->viz.mouse_button_down[2]){
@@ -1013,7 +1221,7 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 		if(frame0 && ctx->bound[0] < ctx->bound[2] && ctx->bound[1] < ctx->bound[3]){ // set initial view
 			double dx = ctx->bound[2] - ctx->bound[0];
 			double dy = ctx->bound[3] - ctx->bound[1];
-			ctx->viz.view_targ.scale = (dx > dy ? dx : dy);
+			ctx->viz.view_targ.scale = 1.2*(dx > dy ? dx : dy);
 			ctx->viz.view_targ.center[0] = 0.5*(ctx->bound[0] + ctx->bound[2]);
 			ctx->viz.view_targ.center[1] = 0.5*(ctx->bound[1] + ctx->bound[3]);
 			ctx->viz.view_targ.angle = 0;
