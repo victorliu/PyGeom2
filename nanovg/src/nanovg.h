@@ -467,6 +467,12 @@ void nvgMoveTo(NVGcontext* ctx, float x, float y);
 // Adds line segment from the last point in the path to the specified point.
 void nvgLineTo(NVGcontext* ctx, float x, float y);
 
+// Creates a new circular arc from current point to bx,by, with bulge factor g.
+// The bulge factor is the ratio of the maximum deviation of the arc from the chord
+// to the half-length of the chord, with positive values meaning the arc is to the right
+// of the chord.
+void nvgArcBulgeTo(NVGcontext* ctx, float bx, float by, float g);
+
 // Adds cubic bezier segment from last point in the path via two control points to the specified point.
 void nvgBezierTo(NVGcontext* ctx, float c1x, float c1y, float c2x, float c2y, float x, float y);
 
@@ -486,6 +492,12 @@ void nvgPathWinding(NVGcontext* ctx, int dir);
 // and the arc is drawn from angle a0 to a1, and swept in direction dir (NVG_CCW, or NVG_CW).
 // Angles are specified in radians.
 void nvgArc(NVGcontext* ctx, float cx, float cy, float r, float a0, float a1, int dir);
+
+// Creates a single segment of a cubic Non-Uniform Rational B-Spline from the current point.
+// This is like nvgBezierTo but with the addition of weights. Can be used to render general
+// cubic NURBS after all knots are fully inserted to maximum multiplicity.
+// w0 is the weight of the current point.
+void nvgCubicNurbsTo(NVGcontext* ctx, float c1x, float c1y, float c2x, float c2y, float x, float y, float w0, float w1, float w2, float w3);
 
 // Creates new rectangle shaped sub-path.
 void nvgRect(NVGcontext* ctx, float x, float y, float w, float h);
