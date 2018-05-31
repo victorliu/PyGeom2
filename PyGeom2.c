@@ -203,9 +203,11 @@ static PyObject* Vector_norm(Vector *v, PyObject *args){
 static PyObject* Vector_angle(Vector *v, PyObject *args){
 	return PyFloat_FromDouble(180.*(atan2(v->v[1], v->v[0])/M_PI));
 }
+static PyObject* Vector_normalize(Vector *v, PyObject *args);
 static PyMethodDef Vector_methods[] = {
 	{"angle", (PyCFunction)Vector_angle, METH_NOARGS, "Return the angle of the vector from the x-axis" },
 	{"norm", (PyCFunction)Vector_norm, METH_NOARGS, "Return the Euclidean length of the vector" },
+	{"normalize", (PyCFunction)Vector_normalize, METH_NOARGS, "Normalizes and returns the vector" },
 	{NULL}  /* Sentinel */
 };
 
@@ -225,6 +227,7 @@ static PyNumberMethods Vector_number_methods = {
 	.nb_add = Vector_add,
 	.nb_subtract = Vector_sub,
 	.nb_multiply = Vector_mul,
+	.nb_divide = Vector_div,
 	.nb_true_divide = Vector_div,
 	.nb_negative = Vector_neg,
 	.nb_xor = Vector_xor,
@@ -365,7 +368,18 @@ static PyObject* Vector_invert(PyObject *o1){
 	v->v[1] =  u->v[0];
 	return (PyObject*)v;
 }
-
+static PyObject* Vector_normalize(Vector *v, PyObject *args){
+	double ilen = 1./hypot(v->v[0], v->v[1]);
+	v->v[0] *= ilen;
+	v->v[1] *= ilen;
+	Vector *r = (Vector*)VectorType.tp_alloc(&VectorType, 0);
+	if(NULL == r){
+		PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
+	}
+	r->v[0] = v->v[0];
+	r->v[1] = v->v[1];
+	return (PyObject*)r;
+}
 ////////////////////////////////////////////////////////
 
 
@@ -600,7 +614,7 @@ static PyObject* Point_sub(PyObject *o1, PyObject *o2){ // p - v, p - p
 		GraphicsContext *lg = (GraphicsContext*)lhs->g;
 		p = GraphicsContext_point_add(lg,
 			lg->p[lhs->i].p[0] - rhs->v[0],
-			lg->p[lhs->i].p[1] - rhs->v[0]
+			lg->p[lhs->i].p[1] - rhs->v[1]
 		);
 		if(NULL == p){
 			PyErr_Format(PyExc_MemoryError, "could not create a new Point");
@@ -640,6 +654,7 @@ static PyObject *GraphicsContext_scale(GraphicsContext *ctx, PyObject *args){
 }
 static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
 	PyObject *name = NULL;
+	Point *pp = NULL;
 	int moveable = 0;
 	int visible = 0;
 	double x = 0, y = 0;
@@ -649,18 +664,30 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 	color.rgba[2] = ctx->viz.default_color[2];
 	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"x", "y", "name", "moveable", "visible", "color", NULL};
-	if(!PyArg_ParseTupleAndKeywords(args, kwds, "dd|O!O&O&O&:point", kwlist,
-		&x, &y,
+	static char *kwlist2[] = {"point", "name", "moveable", "visible", "color", NULL};
+	if(PyArg_ParseTupleAndKeywords(args, kwds, "O!|O!O&O&O&:point", kwlist2,
+		&PointType, &pp,
 		&PyUnicode_Type, &name,
 		&PyBoolean_converter, &moveable,
 		&PyBoolean_converter, &visible,
 		&color_converter, &color.rgba[0]
-	)){ return NULL; }
-	
+	)){
+		x = ctx->p[pp->i].p[0];
+		y = ctx->p[pp->i].p[1];
+	}else{
+		PyErr_Clear();
+		if(!PyArg_ParseTupleAndKeywords(args, kwds, "dd|O!O&O&O&:point", kwlist,
+			&x, &y,
+			&PyUnicode_Type, &name,
+			&PyBoolean_converter, &moveable,
+			&PyBoolean_converter, &visible,
+			&color_converter, &color.rgba[0]
+		)){ return NULL; }
+	}
 	Point *p;
 	if(moveable){
 		visible = 1;
-		if(ctx->nmp_cur >= ctx->nmp && ctx->nmp_cur < ctx->np){
+		if(ctx->nmp_cur >= ctx->nmp){
 			if(ctx->nmp >= ctx->nmp_alloc){
 				ctx->nmp_alloc *= 2;
 				ctx->mp = (int*)realloc(ctx->mp, sizeof(int)*ctx->nmp_alloc);
@@ -731,10 +758,11 @@ static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyOb
 	Py_RETURN_NONE;
 }
 static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pcenter = NULL;
+	Point *pc = NULL;
 	double radius = 0;
 	double start = 0;
 	double stop = 360;
+	Point *pd = NULL;
 	int clockwise = 0;
 	NVGcolor color;
 	color.rgba[0] = ctx->viz.default_color[0];
@@ -742,24 +770,42 @@ static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObj
 	color.rgba[2] = ctx->viz.default_color[2];
 	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"center", "radius", "start", "stop", "clockwise", "stroke", /*"arrow_from", "arrow_to", "dashing",*/ NULL};
-	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|ddO&:arc", kwlist,
-		&PointType, (PyObject**)&pcenter,
+	static char *kwlist2[] = {"from", "to", "bulge", "stroke", /*"arrow_from", "arrow_to", "dashing",*/ NULL};
+	if(PyArg_ParseTupleAndKeywords(args, kwds, "O!d|ddO&:arc", kwlist,
+		&PointType, (PyObject**)&pc,
 		&radius, &start, &stop,
 		&PyBoolean_converter, &clockwise,
 		&color_converter, &color.rgba[0]
-	)){ return NULL; }
-	
-	start *= M_PI/180;
-	stop  *= M_PI/180;
-	
-	nvgBeginPath(ctx->vg);
-	nvgArc(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], radius, start, stop, clockwise ? NVG_CW : NVG_CCW);
-	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
-	nvgStrokeWidth(ctx->vg, lw);
-	nvgStrokeColor(ctx->vg, color);
-	nvgStroke(ctx->vg);
-	
-	Py_RETURN_NONE;
+	)){
+		start *= M_PI/180;
+		stop  *= M_PI/180;
+		
+		nvgBeginPath(ctx->vg);
+		nvgArc(ctx->vg, ctx->p[pc->i].p[0], ctx->p[pc->i].p[1], radius, start, stop, clockwise ? NVG_CW : NVG_CCW);
+		const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
+		nvgStrokeWidth(ctx->vg, lw);
+		nvgStrokeColor(ctx->vg, color);
+		nvgStroke(ctx->vg);
+		Py_RETURN_NONE;
+	}else{
+		PyErr_Clear();
+		if(PyArg_ParseTupleAndKeywords(args, kwds, "O!O!|dO&:arc", kwlist2,
+			&PointType, (PyObject**)&pc,
+			&PointType, (PyObject**)&pd,
+			&radius,
+			&color_converter, &color.rgba[0]
+		)){
+			nvgBeginPath(ctx->vg);
+			nvgMoveTo(ctx->vg, ctx->p[pc->i].p[0], ctx->p[pc->i].p[1]);
+			nvgArcBulgeTo(ctx->vg, ctx->p[pd->i].p[0], ctx->p[pd->i].p[1], radius);
+			const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
+			nvgStrokeWidth(ctx->vg, lw);
+			nvgStrokeColor(ctx->vg, color);
+			nvgStroke(ctx->vg);
+			Py_RETURN_NONE;
+		}
+		return NULL;
+	}
 }
 static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
 	Point *pbase = NULL;
@@ -794,7 +840,7 @@ static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyOb
 }
 static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
 	Point *pcenter = NULL;
-	double radius = 0;
+	double r = 0;
 	NVGcolor stroke_color;
 	stroke_color.rgba[0] = ctx->viz.default_color[0];
 	stroke_color.rgba[1] = ctx->viz.default_color[1];
@@ -804,13 +850,20 @@ static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, Py
 	static char *kwlist[] = {"center", "radius", "stroke", "fill", /*"dashing",*/ NULL};;
 	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|O&O&:circle", kwlist,
 		&PointType, (PyObject**)&pcenter,
-		&radius,
+		&r,
 		&color_converter, &stroke_color.rgba[0],
 		&color_converter, &fill_color.rgba[0]
 	)){ return NULL; }
 	
+	double x = ctx->p[pcenter->i].p[0];
+	double y = ctx->p[pcenter->i].p[1];
+	if(x-r < ctx->bound[0]){ ctx->bound[0] = x-r; }
+	if(y-r < ctx->bound[1]){ ctx->bound[1] = y-r; }
+	if(x+r > ctx->bound[2]){ ctx->bound[2] = x+r; }
+	if(y+r > ctx->bound[3]){ ctx->bound[3] = y+r; }
+	
 	nvgBeginPath(ctx->vg);
-	nvgCircle(ctx->vg, ctx->p[pcenter->i].p[0], ctx->p[pcenter->i].p[1], radius);
+	nvgCircle(ctx->vg, x, y, r);
 	const double lw = viz_state_get_coord_size(&ctx->viz, ctx->viz.line_width);
 	nvgStrokeWidth(ctx->vg, lw);
 	nvgFillColor(ctx->vg, fill_color);
