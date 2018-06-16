@@ -919,6 +919,11 @@ static PyObject *GraphicsContext_rect(GraphicsContext *ctx, PyObject *args, PyOb
 	)){ return NULL; }
 	
 	const double *c = &(ctx->p[pcenter->i].p[0]);
+	if(c[0]-halfwidth[0] < ctx->bound[0]){ ctx->bound[0] = c[0]-halfwidth[0]; }
+	if(c[1]-halfwidth[1] < ctx->bound[1]){ ctx->bound[1] = c[1]-halfwidth[1]; }
+	if(c[0]+halfwidth[0] > ctx->bound[2]){ ctx->bound[2] = c[0]+halfwidth[0]; }
+	if(c[1]+halfwidth[1] > ctx->bound[3]){ ctx->bound[3] = c[1]+halfwidth[1]; }
+	
 	nvgBeginPath(ctx->vg);
 	nvgMoveTo(ctx->vg, c[0] - halfwidth[0], c[1] - halfwidth[1]);
 	nvgLineTo(ctx->vg, c[0] + halfwidth[0], c[1] - halfwidth[1]);
