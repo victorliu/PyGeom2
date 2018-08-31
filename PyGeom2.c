@@ -222,7 +222,12 @@ static PyObject* Vector_invert(PyObject *o1); // rot90
 static PyObject* Point_add(PyObject *o1, PyObject *o2); // p + v
 static PyObject* Point_sub(PyObject *o1, PyObject *o2); // p - v, p - p
 
+static PyObject* Vector_get_tuple(Vector *v, void *closure);
 
+static PyGetSetDef Vector_getseters[] = {
+	{"tuple", (getter)Vector_get_tuple, NULL, "Get vector as tuple", NULL},
+	{NULL}
+};
 static PyNumberMethods Vector_number_methods = {
 	.nb_add = Vector_add,
 	.nb_subtract = Vector_sub,
@@ -238,6 +243,35 @@ PyObject* Vector_repr(Vector *v){
 	snprintf(str, 64, "[%f, %f]", v->v[0], v->v[1]);
 	return PyUnicode_FromString(str);
 }
+Py_ssize_t Vector_sq_length(Vector *v){
+	return 2;
+}
+PyObject* Vector_sq_item(Vector *v, Py_ssize_t i){
+	if(0 <= i && i < 2){
+		return PyFloat_FromDouble(v->v[i]);
+	}else{
+		PyErr_SetString(PyExc_IndexError, "only indices 0 (x) and 1 (y) are allowed");
+		return NULL;
+	}
+}
+int Vector_sq_ass_item(Vector *v, Py_ssize_t i, PyObject *val){
+	double d = PyFloat_AsDouble(val);
+	if(PyErr_Occurred()){
+		return -1;
+	}
+	if(0 <= i && i < 2){
+		v->v[i] = d;
+		return 0;
+	}else{
+		PyErr_SetString(PyExc_IndexError, "only indices 0 (x) and 1 (y) are allowed");
+		return -1;
+	}
+}
+static PySequenceMethods Vector_sequence_methods = {
+	.sq_length = (lenfunc)Vector_sq_length,
+	.sq_item = (ssizeargfunc)Vector_sq_item,
+	.sq_ass_item = (ssizeobjargproc)Vector_sq_ass_item,
+};
 static PyTypeObject VectorType = {
 	PyVarObject_HEAD_INIT(NULL, 0)
 	.tp_name = "PyGeom2.Vector",
@@ -252,6 +286,8 @@ static PyTypeObject VectorType = {
 	.tp_dealloc = (destructor)Vector_dealloc,
 	.tp_members = Vector_members,
 	.tp_methods = Vector_methods,
+	.tp_getset = Vector_getseters,
+	.tp_as_sequence = &Vector_sequence_methods,
 };
 static int Vector_check(PyObject *obj){
 	return PyObject_TypeCheck(obj, &VectorType);
@@ -259,10 +295,10 @@ static int Vector_check(PyObject *obj){
 
 static PyObject* Vector_add(PyObject *o1, PyObject *o2){ // v + v
 	if(!Vector_check(o1)){
-		return PyErr_Format(PyExc_TypeError, "expected Point on LHS of plus operator");
+		return PyErr_Format(PyExc_TypeError, "expected Vector on LHS of plus operator");
 	}
 	if(!Vector_check(o2)){
-		return PyErr_Format(PyExc_TypeError, "expected Point on RHS of plus operator");
+		return PyErr_Format(PyExc_TypeError, "expected Vector on RHS of plus operator");
 	}
 	Vector *lhs = (Vector*)o1;
 	Vector *rhs = (Vector*)o2;
@@ -380,6 +416,9 @@ static PyObject* Vector_normalize(Vector *v, PyObject *args){
 	r->v[1] = v->v[1];
 	return (PyObject*)r;
 }
+static PyObject* Vector_get_tuple(Vector *v, void *closure){
+	return Py_BuildValue("(dd)", v->v[0], v->v[1]);
+}
 ////////////////////////////////////////////////////////
 
 
@@ -387,9 +426,9 @@ typedef struct{
 	PyObject_HEAD
 	PyObject *g;
 	int i;
-} Point;
+} PyGeom2_Point;
 
-static void Point_dealloc(Point *self){
+static void Point_dealloc(PyGeom2_Point *self){
 	Py_XDECREF(self->g);
 	Py_TYPE(self)->tp_free((PyObject *) self);
 }
@@ -403,13 +442,26 @@ static PyNumberMethods Point_number_methods = {
 	.nb_add = Point_add,
 	.nb_subtract = Point_sub,
 };
-static PyObject* Point_repr(Point *p);
+static PyObject* Point_repr(PyGeom2_Point *p);
 
+static PyObject* Point_get_tuple(PyGeom2_Point *p, void *closure);
+static PyGetSetDef Point_getseters[] = {
+	{"tuple", (getter)Point_get_tuple, NULL, "Get point as tuple", NULL},
+	{NULL}
+};
+Py_ssize_t Point_sq_length(PyGeom2_Point *p){
+	return 2;
+}
+PyObject* Point_sq_item(PyGeom2_Point *p, Py_ssize_t i);
+static PySequenceMethods Point_sequence_methods = {
+	.sq_length = (lenfunc)Point_sq_length,
+	.sq_item = (ssizeargfunc)Point_sq_item,
+};
 static PyTypeObject PointType = {
 	PyVarObject_HEAD_INIT(NULL, 0)
-	.tp_name = "PyGeom2.Point",
-	.tp_doc = "Point object",
-	.tp_basicsize = sizeof(Point),
+	.tp_name = "PyGeom2.PyGeom2_Point",
+	.tp_doc = "PyGeom2_Point object",
+	.tp_basicsize = sizeof(PyGeom2_Point),
 	.tp_itemsize = 0,
 	.tp_repr = (reprfunc)Point_repr,
 	.tp_as_number = &Point_number_methods,
@@ -418,8 +470,10 @@ static PyTypeObject PointType = {
 	//.tp_init = (initproc)Point_init,
 	.tp_dealloc = (destructor)Point_dealloc,
 	.tp_methods = Point_methods,
+	.tp_getset = Point_getseters,
+	.tp_as_sequence = &Point_sequence_methods,
 };
-static int Point_check(PyObject *obj){
+int PyGeom2_Point_Check(PyObject *obj){
 	return PyObject_TypeCheck(obj, &PointType);
 }
 
@@ -435,7 +489,7 @@ typedef struct{
 } gpoint;
 
 typedef struct{
-	Point **p;
+	PyGeom2_Point **p;
 	Py_ssize_t n;
 } vertexlist;
 void vertexlist_init(vertexlist *vlist){
@@ -455,14 +509,14 @@ static int vertexlist_converter(PyObject *arg, vertexlist *result){
 		((n = PySequence_Fast_GET_SIZE(fast)) >= 3)
 	){
 		result->n = n;
-		result->p = (Point**)malloc(sizeof(Point*)*n);
+		result->p = (PyGeom2_Point**)malloc(sizeof(PyGeom2_Point*)*n);
 		for(i = 0; i < n; ++i){
 			PyObject *elem = PySequence_Fast_GET_ITEM(fast, i);
-			if(!Point_check(elem)){
-				PyErr_Format(PyExc_TypeError, "element %d is not a Point object", i);
+			if(!PyGeom2_Point_Check(elem)){
+				PyErr_Format(PyExc_TypeError, "element %d is not a PyGeom2_Point object", i);
 				return 0;
 			}
-			result->p[i] = (Point*)elem;
+			result->p[i] = (PyGeom2_Point*)elem;
 		}
 		return 1;
 	}
@@ -541,8 +595,8 @@ static PyTypeObject GraphicsContextType = {
 	.tp_methods = GraphicsContext_methods,
 };
 
-static Point* GraphicsContext_point_add(GraphicsContext *ctx, double x, double y){
-	Point *p = (Point*)PointType.tp_alloc(&PointType, 0);
+static PyGeom2_Point* GraphicsContext_point_add(GraphicsContext *ctx, double x, double y){
+	PyGeom2_Point *p = (PyGeom2_Point*)PointType.tp_alloc(&PointType, 0);
 	if(NULL == p){
 		return NULL;
 	}
@@ -560,7 +614,7 @@ static Point* GraphicsContext_point_add(GraphicsContext *ctx, double x, double y
 	return p;
 }
 
-static PyObject* Point_repr(Point *p){
+static PyObject* Point_repr(PyGeom2_Point *p){
 	char str[64];
 	double x, y;
 	const int i = p->i;
@@ -571,13 +625,34 @@ static PyObject* Point_repr(Point *p){
 	snprintf(str, 64, "(%f, %f)", x, y);
 	return PyUnicode_FromString(str);
 }
-static PyObject* Point_add(PyObject *o1, PyObject *o2){ // p + v
-	if(!Point_check(o1)){
-		return PyErr_Format(PyExc_TypeError, "expected Point on LHS of plus operator");
+PyObject* Point_sq_item(PyGeom2_Point *p, Py_ssize_t i){
+	const GraphicsContext *g = (GraphicsContext*)p->g;
+	if(NULL == g){
+		PyErr_SetString(PyExc_RuntimeError, "p->g is NULL");
+		return NULL;
 	}
-	Point *lhs = (Point*)o1;
+	if(0 <= i && i < 2){
+		if(!(0 <= p->i && p->i < g->np)){
+			PyErr_SetString(PyExc_RuntimeError, "p->i out of range");
+			return NULL;
+		}
+		return PyFloat_FromDouble(g->p[p->i].p[i]);
+	}else{
+		PyErr_SetString(PyExc_IndexError, "only indices 0 (x) and 1 (y) are allowed");
+		return NULL;
+	}
+}
+static PyObject* Point_get_tuple(PyGeom2_Point *p, void *closure){
+	const GraphicsContext *g = (GraphicsContext*)p->g;
+	return Py_BuildValue("(dd)", g->p[p->i].p[0], g->p[p->i].p[1]);
+}
+static PyObject* Point_add(PyObject *o1, PyObject *o2){ // p + v
+	if(!PyGeom2_Point_Check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected PyGeom2_Point on LHS of plus operator");
+	}
+	PyGeom2_Point *lhs = (PyGeom2_Point*)o1;
 	if(Vector_check(o2)){
-		Point *p;
+		PyGeom2_Point *p;
 		Vector *rhs = (Vector*)o2;
 		GraphicsContext *lg = (GraphicsContext*)lhs->g;
 		p = GraphicsContext_point_add(lg,
@@ -585,7 +660,26 @@ static PyObject* Point_add(PyObject *o1, PyObject *o2){ // p + v
 			lg->p[lhs->i].p[1] + rhs->v[1]
 		);
 		if(NULL == p){
-			return PyErr_Format(PyExc_MemoryError, "could not create a new Point");
+			return PyErr_Format(PyExc_MemoryError, "could not create a new PyGeom2_Point");
+		}
+		return (PyObject*)p;
+	}else if(PySequence_Check(o2) && 2 == PySequence_Size(o2)){
+		double rhs[2];
+		unsigned i;
+		for(i = 0; i < 2; ++i){
+			PyObject *elem = PySequence_GetItem(o2, i);
+			if(NULL == elem){ return NULL; }
+			rhs[i] = PyFloat_AsDouble(elem);
+			if(PyErr_Occurred()){ return NULL; }
+		}
+		PyGeom2_Point *p;
+		GraphicsContext *lg = (GraphicsContext*)lhs->g;
+		p = GraphicsContext_point_add(lg,
+			lg->p[lhs->i].p[0] + rhs[0],
+			lg->p[lhs->i].p[1] + rhs[1]
+		);
+		if(NULL == p){
+			return PyErr_Format(PyExc_MemoryError, "could not create a new PyGeom2_Point");
 		}
 		return (PyObject*)p;
 	}else{
@@ -593,12 +687,12 @@ static PyObject* Point_add(PyObject *o1, PyObject *o2){ // p + v
 	}
 }
 static PyObject* Point_sub(PyObject *o1, PyObject *o2){ // p - v, p - p
-	if(!Point_check(o1)){
-		return PyErr_Format(PyExc_TypeError, "expected Point on LHS of minus operator");
+	if(!PyGeom2_Point_Check(o1)){
+		return PyErr_Format(PyExc_TypeError, "expected PyGeom2_Point on LHS of minus operator");
 	}
-	Point *lhs = (Point*)o1;
-	if(Point_check(o2)){
-		Point *rhs = (Point*)o2;
+	PyGeom2_Point *lhs = (PyGeom2_Point*)o1;
+	if(PyGeom2_Point_Check(o2)){
+		PyGeom2_Point *rhs = (PyGeom2_Point*)o2;
 		Vector *v = (Vector*)VectorType.tp_alloc(&VectorType, 0);
 		if(NULL == v){
 			PyErr_Format(PyExc_MemoryError, "could not create a new Vector");
@@ -609,7 +703,7 @@ static PyObject* Point_sub(PyObject *o1, PyObject *o2){ // p - v, p - p
 		v->v[1] = lg->p[lhs->i].p[1] - rg->p[rhs->i].p[1];
 		return (PyObject*)v;
 	}else if(Vector_check(o2)){
-		Point *p;
+		PyGeom2_Point *p;
 		Vector *rhs = (Vector*)o2;
 		GraphicsContext *lg = (GraphicsContext*)lhs->g;
 		p = GraphicsContext_point_add(lg,
@@ -617,11 +711,11 @@ static PyObject* Point_sub(PyObject *o1, PyObject *o2){ // p - v, p - p
 			lg->p[lhs->i].p[1] - rhs->v[1]
 		);
 		if(NULL == p){
-			PyErr_Format(PyExc_MemoryError, "could not create a new Point");
+			PyErr_Format(PyExc_MemoryError, "could not create a new PyGeom2_Point");
 		}
 		return (PyObject*)p;
 	}else{
-		return PyErr_Format(PyExc_TypeError, "expected Point or Vector on RHS of minus operator");
+		return PyErr_Format(PyExc_TypeError, "expected PyGeom2_Point or Vector on RHS of minus operator");
 	}
 }
 
@@ -652,12 +746,36 @@ static PyObject *GraphicsContext_scale(GraphicsContext *ctx, PyObject *args){
 	nvgScale(ctx->vg, x, y);
 	Py_RETURN_NONE;
 }
+static int point_converter(PyObject *arg, void *result){
+	double *xy = (double*)result;
+	if(PyObject_TypeCheck(arg, &PointType)){
+		PyGeom2_Point *p = (PyGeom2_Point*)arg;
+		const GraphicsContext *g = (const GraphicsContext*)p->g;
+		if(NULL == g){
+			PyErr_SetString(PyExc_RuntimeError, "p->g is NULL");
+			return 0;
+		}
+		xy[0] = g->p[p->i].p[0];
+		xy[1] = g->p[p->i].p[1];
+		return 1;
+	}else if(PySequence_Check(arg) && 2 == PySequence_Size(arg)){
+		unsigned i;
+		for(i = 0; i < 2; ++i){
+			PyObject *elem = PySequence_GetItem(arg, i);
+			xy[i] = PyFloat_AsDouble(elem);
+			if(PyErr_Occurred()){ return 0; }
+		}
+		return 1;
+	}else{
+		PyErr_SetString(PyExc_TypeError, "expected point or length 2 sequence");
+		return 0;
+	}
+}
 static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
 	PyObject *name = NULL;
-	Point *pp = NULL;
 	int moveable = 0;
 	int visible = 0;
-	double x = 0, y = 0;
+	double xy[2] = { 0, 0 };
 	NVGcolor color;
 	color.rgba[0] = ctx->viz.default_color[0];
 	color.rgba[1] = ctx->viz.default_color[1];
@@ -665,26 +783,25 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 	color.rgba[3] = ctx->viz.default_color[3];
 	static char *kwlist[] = {"x", "y", "name", "moveable", "visible", "color", NULL};
 	static char *kwlist2[] = {"point", "name", "moveable", "visible", "color", NULL};
-	if(PyArg_ParseTupleAndKeywords(args, kwds, "O!|O!O&O&O&:point", kwlist2,
-		&PointType, &pp,
+	if(PyArg_ParseTupleAndKeywords(args, kwds, "O&|O!O&O&O&:point", kwlist2,
+		&point_converter, &xy[0],
 		&PyUnicode_Type, &name,
 		&PyBoolean_converter, &moveable,
 		&PyBoolean_converter, &visible,
 		&color_converter, &color.rgba[0]
 	)){
-		x = ctx->p[pp->i].p[0];
-		y = ctx->p[pp->i].p[1];
+		// success!
 	}else{
 		PyErr_Clear();
 		if(!PyArg_ParseTupleAndKeywords(args, kwds, "dd|O!O&O&O&:point", kwlist,
-			&x, &y,
+			&xy[0], &xy[1],
 			&PyUnicode_Type, &name,
 			&PyBoolean_converter, &moveable,
 			&PyBoolean_converter, &visible,
 			&color_converter, &color.rgba[0]
 		)){ return NULL; }
 	}
-	Point *p;
+	PyGeom2_Point *p;
 	if(moveable){
 		visible = 1;
 		if(ctx->nmp_cur >= ctx->nmp){
@@ -692,21 +809,21 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 				ctx->nmp_alloc *= 2;
 				ctx->mp = (int*)realloc(ctx->mp, sizeof(int)*ctx->nmp_alloc);
 			}
-			p = GraphicsContext_point_add(ctx, x, y);
+			p = GraphicsContext_point_add(ctx, xy[0], xy[1]);
 			ctx->mp[ctx->nmp] = p->i;
 			ctx->nmp++;
 			
-			ctx->p[p->i].p[0] = x;
-			ctx->p[p->i].p[1] = y;
+			ctx->p[p->i].p[0] = xy[0];
+			ctx->p[p->i].p[1] = xy[1];
 		}else{
-			x = ctx->p[ctx->mp[ctx->nmp_cur]].p[0];
-			y = ctx->p[ctx->mp[ctx->nmp_cur]].p[1];
-			p = GraphicsContext_point_add(ctx, x, y);
+			xy[0] = ctx->p[ctx->mp[ctx->nmp_cur]].p[0];
+			xy[1] = ctx->p[ctx->mp[ctx->nmp_cur]].p[1];
+			p = GraphicsContext_point_add(ctx, xy[0], xy[1]);
 		}
 		ctx->p[p->i].flags |= GPOINT_MOVEABLE;
 		ctx->nmp_cur++;
 	}else{
-		p = GraphicsContext_point_add(ctx, x, y);
+		p = GraphicsContext_point_add(ctx, xy[0], xy[1]);
 	}
 	
 	if(visible){
@@ -718,23 +835,23 @@ static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyO
 		Py_INCREF(name);
 	}
 
-	if(x < ctx->bound[0]){ ctx->bound[0] = x; }
-	if(y < ctx->bound[1]){ ctx->bound[1] = y; }
-	if(x > ctx->bound[2]){ ctx->bound[2] = x; }
-	if(y > ctx->bound[3]){ ctx->bound[3] = y; }
+	if(xy[0] < ctx->bound[0]){ ctx->bound[0] = xy[0]; }
+	if(xy[1] < ctx->bound[1]){ ctx->bound[1] = xy[1]; }
+	if(xy[0] > ctx->bound[2]){ ctx->bound[2] = xy[0]; }
+	if(xy[1] > ctx->bound[3]){ ctx->bound[3] = xy[1]; }
 	
 	//printf("point(%f, %f)\n", p->p[0], p->p[1]);
 	if(visible){
 		nvgBeginPath(ctx->vg);
 		const double pr = viz_state_get_coord_size(&ctx->viz, ctx->viz.point_size);
-		nvgCircle(ctx->vg, x, y, pr);
+		nvgCircle(ctx->vg, xy[0], xy[1], pr);
 		nvgFillColor(ctx->vg, color);
 		nvgFill(ctx->vg);
 	}
 	return (PyObject *)p;
 }
 static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pfrom = NULL, *pto = NULL;
+	PyGeom2_Point *pfrom = NULL, *pto = NULL;
 	NVGcolor color;
 	color.rgba[0] = ctx->viz.default_color[0];
 	color.rgba[1] = ctx->viz.default_color[1];
@@ -758,11 +875,11 @@ static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyOb
 	Py_RETURN_NONE;
 }
 static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pc = NULL;
+	PyGeom2_Point *pc = NULL;
 	double radius = 0;
 	double start = 0;
 	double stop = 360;
-	Point *pd = NULL;
+	PyGeom2_Point *pd = NULL;
 	int clockwise = 0;
 	NVGcolor color;
 	color.rgba[0] = ctx->viz.default_color[0];
@@ -808,7 +925,7 @@ static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObj
 	}
 }
 static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pbase = NULL;
+	PyGeom2_Point *pbase = NULL;
 	PyObject *str = NULL;
 	double size = 1;
 	NVGcolor color;
@@ -839,7 +956,7 @@ static PyObject *GraphicsContext_text(GraphicsContext *ctx, PyObject *args, PyOb
 	Py_RETURN_NONE;
 }
 static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pcenter = NULL;
+	PyGeom2_Point *pcenter = NULL;
 	double r = 0;
 	NVGcolor stroke_color;
 	stroke_color.rgba[0] = ctx->viz.default_color[0];
@@ -874,7 +991,7 @@ static PyObject *GraphicsContext_circle(GraphicsContext *ctx, PyObject *args, Py
 	Py_RETURN_NONE;
 }
 static PyObject *GraphicsContext_ellipse(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pcenter = NULL;
+	PyGeom2_Point *pcenter = NULL;
 	double halfwidth[2] = {0,0};
 	NVGcolor stroke_color;
 	stroke_color.rgba[0] = ctx->viz.default_color[0];
@@ -902,7 +1019,7 @@ static PyObject *GraphicsContext_ellipse(GraphicsContext *ctx, PyObject *args, P
 	Py_RETURN_NONE;
 }
 static PyObject *GraphicsContext_rect(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
-	Point *pcenter = NULL;
+	PyGeom2_Point *pcenter = NULL;
 	double halfwidth[2] = {0,0};
 	NVGcolor stroke_color;
 	stroke_color.rgba[0] = ctx->viz.default_color[0];
@@ -996,12 +1113,14 @@ static void char_callback(GLFWwindow*, unsigned int c){
 	}
 }
 */
-static void glfw_framebuffer_size_callback(GLFWwindow* window, int w, int h){
+static void glfw_window_size_callback(GLFWwindow* window, int w, int h){
 	GraphicsContext *ctx = (GraphicsContext*)glfwGetWindowUserPointer(window);
 	ctx->viz.window_size[0] = w;
 	ctx->viz.window_size[1] = h;
 	ctx->viz.window_size[2] = (w < h ? w : h);
 	if(ctx->viz.window_size[2] < 1){ ctx->viz.window_size[2] = 1; }
+}
+static void glfw_framebuffer_size_callback(GLFWwindow* window, int w, int h){
 	glViewport(0, 0, w, h);
 }
 static void glfw_mouse_button_callback(GLFWwindow* window, int button, int action, int mods){
@@ -1149,6 +1268,7 @@ static PyObject *PyGeom2_show(PyTypeObject *type, PyObject *args, PyObject *kwds
 	
 	//glfwSetCharCallback(window, char_callback);
 	glfwSetKeyCallback(window, glfw_key_callback);
+	glfwSetWindowSizeCallback(window, glfw_window_size_callback);
 	glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
 	glfwSetCursorPosCallback(window, glfw_cursor_callback);
 	glfwSetMouseButtonCallback(window, glfw_mouse_button_callback);
