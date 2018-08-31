@@ -550,6 +550,14 @@ static PyObject *GraphicsContext_translate(GraphicsContext *ctx, PyObject *args)
 static PyObject *GraphicsContext_rotate(GraphicsContext *ctx, PyObject *args);
 static PyObject *GraphicsContext_scale(GraphicsContext *ctx, PyObject *args);
 
+static PyObject *GraphicsContext_newpath  (GraphicsContext *ctx, PyObject *args);
+static PyObject *GraphicsContext_moveto   (GraphicsContext *ctx, PyObject *args);
+static PyObject *GraphicsContext_lineto   (GraphicsContext *ctx, PyObject *args);
+static PyObject *GraphicsContext_curveto  (GraphicsContext *ctx, PyObject *args);
+static PyObject *GraphicsContext_closepath(GraphicsContext *ctx, PyObject *args);
+static PyObject *GraphicsContext_stroke   (GraphicsContext *ctx, PyObject *args, PyObject *kwds);
+static PyObject *GraphicsContext_fill     (GraphicsContext *ctx, PyObject *args, PyObject *kwds);
+
 static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyObject *kwds);
 static PyObject *GraphicsContext_line(GraphicsContext *ctx, PyObject *args, PyObject *kwds);
 static PyObject *GraphicsContext_arc(GraphicsContext *ctx, PyObject *args, PyObject *kwds);
@@ -571,6 +579,13 @@ static PyMethodDef GraphicsContext_methods[] = {
 	{"translate", (PyCFunction)GraphicsContext_translate, METH_VARARGS, "Apply a translation" },
 	{"rotate"   , (PyCFunction)GraphicsContext_rotate   , METH_VARARGS, "Apply a rotation" },
 	{"scale"    , (PyCFunction)GraphicsContext_scale    , METH_VARARGS, "Apply a scaling" },
+	{"newpath"  , (PyCFunction)GraphicsContext_newpath  , METH_NOARGS , "Start a new path" },
+	{"moveto"   , (PyCFunction)GraphicsContext_moveto   , METH_VARARGS, "Move current point" },
+	{"lineto"   , (PyCFunction)GraphicsContext_lineto   , METH_VARARGS, "Line to new point" },
+	{"curveto"  , (PyCFunction)GraphicsContext_curveto  , METH_VARARGS, "Cubic bezier point to new point" },
+	{"closepath", (PyCFunction)GraphicsContext_closepath, METH_NOARGS , "Close current path" },
+	{"stroke"   , (PyCFunction)GraphicsContext_stroke   , METH_VARARGS | METH_KEYWORDS, "Stroke current path" },
+	{"fill"     , (PyCFunction)GraphicsContext_fill     , METH_VARARGS | METH_KEYWORDS, "Fill current path" },
 	{"point", (PyCFunction)GraphicsContext_point, METH_VARARGS | METH_KEYWORDS, "Create a new point" },
 	{"line" , (PyCFunction)GraphicsContext_line , METH_VARARGS | METH_KEYWORDS, "Create a line segment between two points" },
 	{"arc"  , (PyCFunction)GraphicsContext_arc  , METH_VARARGS | METH_KEYWORDS, "Create a circular arc" },
@@ -746,6 +761,7 @@ static PyObject *GraphicsContext_scale(GraphicsContext *ctx, PyObject *args){
 	nvgScale(ctx->vg, x, y);
 	Py_RETURN_NONE;
 }
+
 static int point_converter(PyObject *arg, void *result){
 	double *xy = (double*)result;
 	if(PyObject_TypeCheck(arg, &PointType)){
@@ -771,6 +787,64 @@ static int point_converter(PyObject *arg, void *result){
 		return 0;
 	}
 }
+
+static PyObject *GraphicsContext_newpath  (GraphicsContext *ctx, PyObject *args){
+	nvgBeginPath(ctx->vg);
+	Py_RETURN_NONE;
+}
+static PyObject *GraphicsContext_moveto   (GraphicsContext *ctx, PyObject *args){
+	double x, y;
+	if(!PyArg_ParseTuple(args, "dd:moveto", &x, &y)){ return NULL; }
+	nvgMoveTo(ctx->vg, x, y);
+	Py_RETURN_NONE;
+}
+static PyObject *GraphicsContext_lineto   (GraphicsContext *ctx, PyObject *args){
+	double x, y;
+	if(!PyArg_ParseTuple(args, "dd:lineto", &x, &y)){ return NULL; }
+	nvgLineTo(ctx->vg, x, y);
+	Py_RETURN_NONE;
+}
+static PyObject *GraphicsContext_curveto  (GraphicsContext *ctx, PyObject *args){
+	double x, y, ax, ay, bx, by;
+	if(!PyArg_ParseTuple(args, "dddddd:curveto", &ax, &ay, &bx, &by, &x, &y)){ return NULL; }
+	nvgBezierTo(ctx->vg, ax, ay, bx, by, x, y);
+	Py_RETURN_NONE;
+}
+static PyObject *GraphicsContext_closepath(GraphicsContext *ctx, PyObject *args){
+	nvgClosePath(ctx->vg);
+	Py_RETURN_NONE;
+}
+static PyObject *GraphicsContext_stroke   (GraphicsContext *ctx, PyObject *args, PyObject *kwds){
+	NVGcolor color;
+	color.rgba[0] = ctx->viz.default_color[0];
+	color.rgba[1] = ctx->viz.default_color[1];
+	color.rgba[2] = ctx->viz.default_color[2];
+	color.rgba[3] = ctx->viz.default_color[3];
+	static char *kwlist[] = {"color", NULL};
+	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O&:stroke", kwlist,
+		&color_converter, &color.rgba[0]
+	)){ return NULL; }
+	
+	nvgStrokeColor(ctx->vg, color);
+	nvgStroke(ctx->vg);
+	Py_RETURN_NONE;
+}
+static PyObject *GraphicsContext_fill     (GraphicsContext *ctx, PyObject *args, PyObject *kwds){
+	NVGcolor color;
+	color.rgba[0] = ctx->viz.default_color[0];
+	color.rgba[1] = ctx->viz.default_color[1];
+	color.rgba[2] = ctx->viz.default_color[2];
+	color.rgba[3] = ctx->viz.default_color[3];
+	static char *kwlist[] = {"color", NULL};
+	if(!PyArg_ParseTupleAndKeywords(args, kwds, "O&:fill", kwlist,
+		&color_converter, &color.rgba[0]
+	)){ return NULL; }
+	
+	nvgFillColor(ctx->vg, color);
+	nvgFill(ctx->vg);
+	Py_RETURN_NONE;
+}
+
 static PyObject *GraphicsContext_point(GraphicsContext *ctx, PyObject *args, PyObject *kwds){
 	PyObject *name = NULL;
 	int moveable = 0;
