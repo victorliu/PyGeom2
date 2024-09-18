@@ -232,7 +232,9 @@ static PyNumberMethods Vector_number_methods = {
 	.nb_add = Vector_add,
 	.nb_subtract = Vector_sub,
 	.nb_multiply = Vector_mul,
+#if PY_MAJOR_VERSION < 3
 	.nb_divide = Vector_div,
+#endif
 	.nb_true_divide = Vector_div,
 	.nb_negative = Vector_neg,
 	.nb_xor = Vector_xor,
