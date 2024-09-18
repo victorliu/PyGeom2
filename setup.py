@@ -14,9 +14,9 @@ elif platform == 'linux':
 	libraries.append('GL');
 
 PyGeom2 = Extension('PyGeom2',
-	include_dirs = ['gl3w/include','/usr/local/include'],
+	include_dirs = ['gl3w/include','/usr/local/include','/opt/homebrew/include'],
 	libraries = libraries,
-	library_dirs = ['/usr/local/lib'],
+	library_dirs = ['/usr/local/lib','/opt/homebrew/lib'],
 	sources = ['PyGeom2.c', 'gl3w/src/gl3w.c', 'nanovg/src/nanovg.c', 'fonts/dejavu_sans_mono.c']
 )
 
